@@ -2013,7 +2013,7 @@ function pagedList(parent, fetchPage, renderItem, emptyText) {
   const sentinel = el('div', { style: 'height:1px' });
   parent.append(list, spin, sentinel);
   let offset = 0, done = false, loading = false;
-  const io = new IntersectionObserver((entries) => { if (entries.some((x) => x.isIntersecting)) load(); }, { root: $('#sheetBody'), rootMargin: '300px' });
+  const io = new IntersectionObserver((entries) => { if (entries.some((x) => x.isIntersecting)) load(); }, { root: scrollRootOf(parent), rootMargin: '300px' });
 
   async function load() {
     if (loading || done || !list.isConnected && offset > 0) return;
@@ -2180,6 +2180,7 @@ async function buildSmartMix(base, size) {
     if (recs.length && list.length < size) { const r = recs.pop(); smart.recs.set(r.t.uri, r.why); list.push(r.t); }
   }
   smart.all = new Set(list.map((t) => t.uri));
+  smart.list = list;
   return list;
 }
 
@@ -2454,6 +2455,268 @@ function homeView() {
   };
 }
 
+/* ---------- Плейлист как в Spotify ----------
+   Шапка в цвете обложки, «N треков · 3 ч 12 мин», круглая ▶, ✦ умное перемешивание,
+   поиск и сортировка, закреплённая мини-шапка при прокрутке, свайп вправо — в очередь. */
+function scrollRootOf(node) { return node.closest('.hub-body, .sheet-body'); }
+
+function fmtLong(ms) {
+  const min = Math.round(ms / 60000);
+  const h = Math.floor(min / 60), m = min % 60;
+  return h ? `${h} ч ${m} мин` : `${m} мин`;
+}
+
+function tracklistView(src) {
+  // src: { title, sub, img, contextUri, fetch(offset) → page, pick(item) → { t, added }, smart(), shareUrl, icon }
+  return {
+    title: src.title,
+    render(body) {
+      const tracks = [];
+      let sort = 'default', query = '', done = false;
+
+      const play = async (t, shuffle = null) => {
+        const ctx = src.contextUri || (src.context ? await src.context().catch(() => null) : null);
+        let ok = ctx && await playOn({ context_uri: ctx, ...(t ? { offset: { uri: t.uri } } : {}) }, shuffle);
+        // Нет контекста или Spotify его не принял — играем списком загруженных треков
+        if (!ok && tracks.length) {
+          const from = t ? Math.max(0, tracks.findIndex((x) => x.t.uri === t.uri)) : 0;
+          ok = await playOn({ uris: tracks.slice(from, from + 100).map((x) => x.t.uri) }, shuffle);
+        }
+        if (ok) closeSheet();
+      };
+
+      const meta = el('div', { class: 'pl-meta' }, 'Загружаю треки…');
+      const smartBtn = el('button', { class: 'pl-icon smart', type: 'button', 'aria-label': 'Умное перемешивание', html: icon('sparkle'),
+        onclick: async () => { const base = src.smart ? await src.smart(tracks) : tracks.map((x) => x.t); if (await smartShuffle(base)) closeSheet(); } });
+      const shuffleBtn = el('button', { class: 'pl-icon', type: 'button', 'aria-label': 'Вперемешку', html: icon('shuffle'),
+        onclick: () => play(tracks.length ? tracks[Math.floor(Math.random() * tracks.length)].t : null, true) });
+      const moreBtn = el('button', { class: 'pl-icon', type: 'button', 'aria-label': 'Ещё', html: icon('more'),
+        onclick: () => openSheet(listMenuView(src, tracks)) });
+      const playBtn = el('button', { class: 'pl-play', type: 'button', 'aria-label': 'Слушать', html: icon('play'),
+        onclick: () => play(null, false) });
+
+      const head = el('header', { class: 'pl-head' },
+        src.img ? el('img', { class: 'pl-cover', src: src.img, alt: '' })
+          : el('div', { class: 'pl-cover pl-cover-ph', html: icon(src.icon || 'music') }),
+        el('h2', { class: 'pl-title' }, src.title),
+        src.sub ? el('div', { class: 'pl-sub' }, src.sub) : null,
+        meta,
+        el('div', { class: 'pl-actions' }, smartBtn, shuffleBtn, moreBtn, el('div', { style: 'flex:1' }), playBtn));
+
+      const search = el('input', { class: 'pl-search', type: 'search', placeholder: 'Найти в списке' });
+      const sorter = el('select', { class: 'pl-sort', 'aria-label': 'Сортировка' },
+        el('option', { value: 'default' }, 'По порядку'), el('option', { value: 'added' }, 'Недавно добавленные'),
+        el('option', { value: 'title' }, 'По названию'), el('option', { value: 'artist' }, 'По артисту'));
+      const tools = el('div', { class: 'pl-tools' }, search, sorter);
+      const list = el('div', { class: 'list pl-list' });
+      const spin = loader();
+
+      // Закреплённая мини-шапка: появляется, когда большая уехала вверх
+      const sticky = el('div', { class: 'pl-sticky' },
+        el('button', { class: 'pl-play small', type: 'button', 'aria-label': 'Слушать', html: icon('play'), onclick: () => play(null, false) }));
+      body.append(sticky, head, tools, list, spin);
+      requestAnimationFrame(() => {
+        const io = new IntersectionObserver(([e]) => sticky.classList.toggle('show', !e.isIntersecting), { root: scrollRootOf(body), threshold: 0 });
+        io.observe(playBtn);
+      });
+
+      // Цвет шапки — из обложки
+      if (src.img) {
+        const im = new Image();
+        im.crossOrigin = 'anonymous';
+        im.onload = () => { const th = buildTheme(extractPalette(im)); head.style.setProperty('--pl-color', th.bg1); sticky.style.setProperty('--pl-color', th.bg1); };
+        im.src = src.img;
+      }
+
+      const draw = () => {
+        let view = tracks;
+        if (query) {
+          const q = query.toLowerCase();
+          view = view.filter(({ t }) => t.name.toLowerCase().includes(q) || itemArtists(t).toLowerCase().includes(q));
+        }
+        if (sort === 'title') view = [...view].sort((a, b) => a.t.name.localeCompare(b.t.name));
+        else if (sort === 'artist') view = [...view].sort((a, b) => itemArtists(a.t).localeCompare(itemArtists(b.t)));
+        else if (sort === 'added') view = [...view].sort((a, b) => (b.added || '').localeCompare(a.added || ''));
+        list.replaceChildren(...view.map((x) => plRow(x.t, x.n, () => play(x.t))));
+        if (done && !view.length) list.append(note(query ? 'Ничего не нашлось' : 'Здесь пока пусто'));
+      };
+      const updateMeta = () => {
+        const dur = tracks.reduce((s, x) => s + (x.t.duration_ms || 0), 0);
+        meta.textContent = `${tracks.length} ${plural(tracks.length, 'трек', 'трека', 'треков')}` + (done && dur ? ' · ' + fmtLong(dur) : '');
+      };
+      search.addEventListener('input', () => { query = search.value.trim(); draw(); });
+      sorter.addEventListener('change', () => { sort = sorter.value; draw(); });
+
+      // Грузим всё (до 2000 треков), показывая по мере загрузки
+      (async () => {
+        try {
+          for (let offset = 0; offset < 2000 && list.isConnected !== false; offset += 50) {
+            const page = await src.fetch(offset);
+            for (const it of page?.items || []) {
+              const x = src.pick(it);
+              if (!x?.t?.uri || x.t.type === 'episode') continue;
+              x.n = tracks.length + 1;
+              tracks.push(x);
+              if (sort === 'default' && !query) list.append(plRow(x.t, x.n, () => play(x.t)));
+            }
+            updateMeta();
+            if (!page?.next || !(page.items || []).length) break;
+            if (!body.isConnected) return;
+          }
+        } catch (e) {
+          list.append(note(e.status === 403 || e.status === 404
+            ? 'Spotify не показывает треки чужих плейлистов, но кнопка ▶ всё равно включит его.'
+            : 'Не удалось загрузить список. Проверь интернет.'));
+        }
+        done = true;
+        spin.hidden = true;
+        updateMeta();
+        if (sort !== 'default' || query || !tracks.length) draw();
+      })();
+    },
+  };
+}
+
+// Строка трека: номер (или эквалайзер у играющего), обложка, название, артист, длительность
+function plRow(t, n, onPlay) {
+  const current = t.uri === ui.trackUri;
+  const isNew = smart.recs.has(t.uri);
+  const node = el('div', { class: 'row pl-row' + (current ? ' current' : ''), role: 'button', tabindex: '0' },
+    el('div', { class: 'pl-num' }, current ? eqBars() : String(n)),
+    el('img', { class: 'thumb', src: pickImage(itemImages(t), 64), alt: '', loading: 'lazy' }),
+    el('div', { class: 'row-text' },
+      el('div', { class: 'row-title' }, t.name),
+      el('div', { class: 'row-sub' }, isNew ? el('b', { class: 'new-tag' }, '✦ ') : null, t.explicit ? el('span', { class: 'explicit' }, 'E') : null, itemArtists(t))),
+    el('div', { class: 'pl-dur' }, t.duration_ms ? fmtTime(t.duration_ms) : ''));
+  bindTrackGestures(node, t, onPlay);
+  return node;
+}
+
+// Нажатие — играть, долгое нажатие — меню трека, свайп вправо — в очередь
+function bindTrackGestures(node, t, onPlay) {
+  let x0 = null, y0 = 0, dx = 0, timer = 0, longed = false, swiping = false;
+  node.addEventListener('pointerdown', (e) => {
+    x0 = e.clientX; y0 = e.clientY; dx = 0; longed = false; swiping = false;
+    clearTimeout(timer);
+    timer = setTimeout(() => { longed = true; navigator.vibrate?.(15); openSheet(trackActionsView(t)); }, 520);
+  });
+  node.addEventListener('pointermove', (e) => {
+    if (x0 == null) return;
+    dx = e.clientX - x0;
+    const dy = e.clientY - y0;
+    if (Math.hypot(dx, dy) > 10) clearTimeout(timer);
+    if (!swiping && dx > 14 && Math.abs(dx) > Math.abs(dy) * 1.6) swiping = true;
+    if (swiping) node.style.transform = `translateX(${Math.min(dx, 120)}px)`;
+    node.classList.toggle('swipe-ready', swiping && dx > 90);
+  });
+  const end = async () => {
+    clearTimeout(timer);
+    if (x0 == null) return;
+    x0 = null;
+    node.style.transform = '';
+    node.classList.remove('swipe-ready');
+    if (swiping) {
+      if (dx > 90) { try { await api.addToQueue(t.uri); toast('Добавлено в очередь'); } catch (e) { handleError(e, false); } }
+      return;
+    }
+    if (!longed && Math.abs(dx) < 10) onPlay?.();
+  };
+  node.addEventListener('pointerup', end);
+  node.addEventListener('pointercancel', () => { clearTimeout(timer); x0 = null; node.style.transform = ''; });
+  node.addEventListener('contextmenu', (e) => e.preventDefault());
+  node.addEventListener('keydown', (e) => { if (e.key === 'Enter') onPlay?.(); });
+}
+
+// ⋯ у плейлиста
+function listMenuView(src, tracks) {
+  return {
+    title: src.title,
+    render(body) {
+      const act = (iconName, title, onClick) => row({ iconName, title, onClick });
+      body.append(el('div', { class: 'list' },
+        act('addQueue', 'Добавить первые 20 треков в очередь', async () => {
+          closeSheet();
+          let n = 0;
+          for (const x of tracks.slice(0, 20)) { try { await api.addToQueue(x.t.uri); n++; } catch {} await sleep(120); }
+          toast(`В очереди +${n}`);
+        }),
+        src.shareUrl ? act('share', 'Поделиться ссылкой', () => { closeSheet(); shareLink(src.shareUrl, src.title); }) : null));
+    },
+  };
+}
+
+async function shareLink(url, title) {
+  try {
+    if (navigator.share) { await navigator.share({ url, title }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(url); toast('Ссылка скопирована'); } catch { toast(url); }
+}
+
+// Меню любого трека (долгое нажатие)
+function trackActionsView(t, current = false) {
+  return {
+    title: 'Трек',
+    render(body) {
+      const img = pickImage(itemImages(t), 300);
+      body.append(el('div', { class: 'hero' }, img ? el('img', { src: img, alt: '' }) : null, heroTitle(t.name, itemArtists(t))));
+      const act = (iconName, title, onClick) => row({ iconName, title, onClick });
+      const likeRow = act('heart', 'Добавить в любимые', async () => {
+        closeSheet();
+        try {
+          const [saved] = (await api.isSaved(t.uri)) || [];
+          await (saved ? api.unsave(t.uri) : api.save(t.uri));
+          toast(saved ? 'Убрано из любимых' : 'Добавлено в любимые');
+          if (t.uri === ui.trackUri) setLiked(!saved, true);
+        } catch (e) { handleError(e, false); }
+      });
+      api.isSaved(t.uri).then((r) => {
+        if (r?.[0] && likeRow.isConnected) { likeRow.querySelector('.row-title').textContent = 'Убрать из любимых'; setIcon(likeRow.querySelector('.thumb-icon'), 'heartFill'); }
+      }).catch(() => {});
+      const id = t.uri?.split(':').pop();
+      body.append(el('div', { class: 'list' },
+        current ? act('lyrics', 'Текст песни', () => { closeSheet(); toggleLyrics(true); }) : null,
+        act('sparkle', '✦ Похожие — умный микс от этого трека', () => { closeSheet(); smartFromTrack(t); }),
+        !current ? act('addQueue', 'Добавить в очередь', async () => { closeSheet(); try { await api.addToQueue(t.uri); toast('Добавлено в очередь'); } catch (e) { handleError(e, false); } }) : null,
+        act('plus', 'Добавить в плейлист', () => pushView(addToPlaylistView(t))),
+        likeRow,
+        (t.artists || []).filter((a) => a.id).map((a) => act('user', 'Артист: ' + a.name, () => { closeSheet(); pushView(artistView(a)); })),
+        t.album?.id ? act('disc', 'Альбом: ' + t.album.name, () => { closeSheet(); pushView(albumView(t.album)); }) : null,
+        id ? act('share', 'Поделиться ссылкой', () => { closeSheet(); shareLink('https://open.spotify.com/track/' + id, t.name); }) : null,
+        current ? act('share', 'Поделиться карточкой', () => { closeSheet(); shareCard(); }) : null,
+      ));
+    },
+  };
+}
+
+// «Похожие»: трек + его артист + похожие артисты — сразу играть, начиная с этого трека
+async function smartFromTrack(t) {
+  toast('✦ Собираю похожие треки…');
+  let base = [t];
+  const a = t.artists?.[0];
+  if (a?.id) { try { base.push(...((await api.artistTopTracks(a.id))?.tracks || [])); } catch {} }
+  base = [...new Map(base.filter((x) => x?.uri).map((x) => [x.uri, x])).values()];
+  const list = (await buildSmartMix(base, 60)).filter((x) => x.uri !== t.uri);
+  list.unshift(t);
+  smart.all.add(t.uri);
+  smart.list = list;
+  const ok = await playOn({ uris: list.map((x) => x.uri) }, false);
+  smart.on = ok;
+  if (ok) toast(`✦ Похожие на «${t.name}»: ${smart.recs.size} новых`);
+}
+
+// Сохранить последний умный микс в Spotify плейлистом
+async function saveSmartMix() {
+  const list = smart.list || [];
+  if (!list.length) { toast('Сначала включи умное перемешивание'); return; }
+  try {
+    const d = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+    const p = await api.createPlaylist('✦ Умный микс · ' + d);
+    const uris = list.map((t) => t.uri);
+    for (let i = 0; i < uris.length; i += 100) await api.addToPlaylist(p.id, uris.slice(i, i + 100));
+    toast(`Сохранено: «${p.name}», ${uris.length} ${plural(uris.length, 'трек', 'трека', 'треков')}`);
+  } catch (e) { handleError(e, false); }
+}
+
 function libraryView() {
   return {
     title: 'Медиатека',
@@ -2484,42 +2747,14 @@ function libraryView() {
 }
 
 function playlistView(p) {
-  return {
-    title: p.name,
-    render(body) {
-      const img = pickImage(p.images, 300);
-      const hero = el('div', { class: 'hero' },
-        img ? el('img', { src: img, alt: '' }) : el('div', { class: 'thumb-icon', html: icon('music'), style: 'width:180px;height:180px;border-radius:18px' }),
-        el('div', {}, el('div', { class: 'row-title', style: 'font-size:20px;white-space:normal' }, p.name),
-          el('div', { class: 'row-sub' }, p.owner?.display_name || '')),
-        el('div', { class: 'hero-actions' },
-          el('button', { class: 'btn-primary', type: 'button', html: icon('play') + 'Слушать',
-            onclick: async () => { if (await playOn({ context_uri: p.uri, offset: { position: 0 } }, false)) closeSheet(); } }),
-          el('button', { class: 'btn-ghost', type: 'button', html: icon('shuffle') + 'Вперемешку',
-            onclick: async () => {
-              // Начинаем со случайного трека, а не всегда с первого
-              const total = (p.items || p.tracks)?.total || 0;
-              const opts = { context_uri: p.uri, ...(total ? { offset: { position: Math.floor(Math.random() * total) } } : {}) };
-              if (await playOn(opts, true)) closeSheet();
-            } }),
-        ),
-      );
-      body.append(hero, el('button', { class: 'btn-smart', type: 'button', html: icon('sparkle') + 'Умное перемешивание · с новыми треками',
-        onclick: async () => {
-          const tracks = [];
-          for (let o = 0; o < 300; o += 50) {
-            const r = await api.playlistItems(p.id, o).catch(() => null);
-            tracks.push(...(r?.items || []).map((it) => it?.item || it?.track).filter((t) => t?.uri && t.type !== 'episode' && !t.uri.startsWith('spotify:local:')));
-            if (!r?.next) break;
-          }
-          if (await smartShuffle(tracks)) closeSheet();
-        } }));
-      pagedList(body, (o) => api.playlistItems(p.id, o), (it, i) => {
-        const t = it?.item || it?.track;
-        return trackRow(t, async () => { if (await playOn({ context_uri: p.uri, offset: { position: i } })) closeSheet(); });
-      }, 'В плейлисте пока пусто');
-    },
-  };
+  const id = p.id || p.uri?.split(':').pop();
+  return tracklistView({
+    title: p.name, sub: p.owner?.display_name || '', img: pickImage(p.images, 300),
+    contextUri: p.uri || 'spotify:playlist:' + id,
+    fetch: (o) => api.playlistItems(id, o),
+    pick: (it) => ({ t: it?.item || it?.track, added: it?.added_at }),
+    shareUrl: 'https://open.spotify.com/playlist/' + id,
+  });
 }
 
 async function setShuffleQuiet(on) {
@@ -2528,43 +2763,14 @@ async function setShuffleQuiet(on) {
 }
 
 function likedView() {
-  // Любимые треки играем как коллекцию целиком (как в Spotify), а не списком из первых 50:
-  // так нажатый трек играет именно он, а «Вперемешку» берёт все любимые треки.
-  let total = 0;
-  const uris = [];
-  const collection = async () => (api.isDemo ? 'spotify:collection' : `spotify:user:${(await getMe()).id}:collection`);
-  const start = async (offset, shuffle) => {
-    let ok = await playOn({ context_uri: await collection(), offset }, shuffle);
-    // Запасной путь, если Spotify не принял коллекцию: список загруженных треков
-    if (!ok && uris.length) {
-      const from = offset.uri ? Math.max(0, uris.indexOf(offset.uri)) : 0;
-      ok = await playOn({ uris: uris.slice(from, from + 100) }, shuffle);
-    }
-    if (ok) closeSheet();
-  };
-  return {
-    title: 'Любимые треки',
-    render(body) {
-      body.append(el('div', { class: 'hero-actions', style: 'margin:0 auto 10px;padding:0 8px' },
-        el('button', { class: 'btn-primary', type: 'button', html: icon('play') + 'Слушать',
-          onclick: () => start({ position: 0 }, false) }),
-        el('button', { class: 'btn-ghost', type: 'button', html: icon('shuffle') + 'Вперемешку',
-          onclick: () => start({ position: Math.floor(Math.random() * Math.max(total, 1)) }, true) }),
-      ), el('button', { class: 'btn-smart', type: 'button', html: icon('sparkle') + 'Умное перемешивание · с новыми треками',
-        onclick: async () => { if (await smartShuffle(await likedPool())) closeSheet(); } }));
-      pagedList(body, async (o) => {
-        const r = await api.likedTracks(o);
-        if (r?.total) total = r.total;
-        return r;
-      }, (it) => {
-        const t = it?.track;
-        if (!t) return null;
-        uris.push(t.uri);
-        // Перемешивание не трогаем: как в Spotify, сначала играет нажатый трек
-        return trackRow(t, () => start({ uri: t.uri }, null));
-      }, 'Лайкни что-нибудь — и оно появится здесь');
-    },
-  };
+  // Любимые играем как коллекцию целиком (как в Spotify): нажатый трек играет именно он
+  return tracklistView({
+    title: 'Любимые треки', sub: 'Твоя медиатека', icon: 'heartFill',
+    context: async () => (api.isDemo ? 'spotify:collection' : `spotify:user:${(await getMe()).id}:collection`),
+    fetch: (o) => api.likedTracks(o),
+    pick: (it) => ({ t: it?.track, added: it?.added_at }),
+    smart: () => likedPool(),
+  });
 }
 
 function searchView() {
@@ -2632,10 +2838,20 @@ function queueView() {
           body.append(el('div', { class: 'section-label' }, 'Сейчас играет'),
             el('div', { class: 'list' }, trackRow(q.currently_playing, null, false)));
         }
+        if (smart.on && smart.list?.length) {
+          body.append(el('button', { class: 'btn-smart', type: 'button', html: icon('sparkle') + 'Сохранить умный микс как плейлист', onclick: saveSmartMix }));
+        }
         const items = (q?.queue || []).filter(Boolean);
         body.append(el('div', { class: 'section-label' }, 'Далее'));
+        // Подобранные умным перемешиванием помечены ✦ и причиной
         body.append(items.length
-          ? el('div', { class: 'list' }, items.slice(0, 30).map((t) => trackRow(t, null, false)))
+          ? el('div', { class: 'list' }, items.slice(0, 40).map((t) => {
+            const why = smart.recs.get(t.uri);
+            const r = trackRow(t, null, false, why ? '✦ ' + why + ' · ' + itemArtists(t) : undefined);
+            if (why) r.classList.add('is-new');
+            bindTrackGestures(r, t, null);
+            return r;
+          }))
           : note('Очередь пуста'));
       }).catch((e) => {
         body.replaceChildren(note(e.status === 404 ? 'Сейчас ничего не играет' : 'Не удалось загрузить очередь'));
@@ -2734,7 +2950,12 @@ function settingsView() {
           applyLook();
           glassBox.hidden = v !== 'glass';
         }),
-        glassBox));
+        glassBox,
+        switchRow('Живая обложка — медленно «дышит» и плывёт, как Canvas в Spotify', !!settings.canvas, (on) => {
+          settings.canvas = on;
+          saveSettings();
+          applyLook();
+        })));
 
       body.append(el('div', { class: 'settings-card' },
         el('h3', {}, 'Визуализатор'),
@@ -2834,21 +3055,47 @@ function bindArtGestures() {
     }, 520);
   });
   art.addEventListener('pointermove', (e) => {
-    if (x0 != null && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) clearTimeout(pressTimer);
+    if (x0 == null) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    if (Math.hypot(dx, dy) > 10) clearTimeout(pressTimer);
+    // Обложка едет за пальцем, как карточка
+    if (!longPressed && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      art.classList.add('dragging');
+      art.style.transform = `translateX(${dx}px) rotate(${dx / 28}deg)`;
+      art.style.opacity = String(Math.max(0.4, 1 - Math.abs(dx) / 420));
+    }
   });
   art.addEventListener('pointerup', (e) => {
     clearTimeout(pressTimer);
-    if (x0 == null || longPressed) { x0 = null; return; }
+    const dragged = art.classList.contains('dragging');
+    art.classList.remove('dragging');
+    if (x0 == null || longPressed) { x0 = null; art.style.transform = ''; art.style.opacity = ''; return; }
     const dx = e.clientX - x0, dy = e.clientY - y0;
     x0 = null;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { skip(dx < 0 ? 1 : -1); return; }
+    if (Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      // Улетает в сторону и возвращается уже с новым треком
+      art.style.transform = `translateX(${dx < 0 ? -110 : 110}vw) rotate(${dx < 0 ? -12 : 12}deg)`;
+      art.style.opacity = '0';
+      setTimeout(() => {
+        art.classList.add('dragging');
+        art.style.transform = `translateX(${dx < 0 ? 60 : -60}px)`;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          art.classList.remove('dragging');
+          art.style.transform = ''; art.style.opacity = '';
+        }));
+      }, 240);
+      command(() => (dx < 0 ? api.next() : api.prev()));
+      return;
+    }
+    art.style.transform = ''; art.style.opacity = '';
+    if (dragged) return;
     if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
       const now = Date.now();
       if (now - lastTap < 320) { toggleLike(true); lastTap = 0; } // двойной тап — лайк
       else lastTap = now;
     }
   });
-  art.addEventListener('pointercancel', () => { x0 = null; clearTimeout(pressTimer); });
+  art.addEventListener('pointercancel', () => { x0 = null; clearTimeout(pressTimer); art.classList.remove('dragging'); art.style.transform = ''; art.style.opacity = ''; });
   art.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
@@ -3346,9 +3593,10 @@ function drawViz(now) {
 /* =====================================================================
    Внешний вид, экран
    ===================================================================== */
-const settings = Object.assign({ glass: 'clear', theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true, playInAura: !!window.AuraNative?.engineStart }, store.get('settings', {}));
+const settings = Object.assign({ canvas: false, glass: 'clear', theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true, playInAura: !!window.AuraNative?.engineStart }, store.get('settings', {}));
 function saveSettings() { store.set('settings', settings); }
 function applyLook() {
+  document.body.classList.toggle('canvas', !!settings.canvas);
   document.body.dataset.theme = settings.theme;
   document.body.dataset.glass = settings.glass;
   updateViz();
@@ -3493,23 +3741,8 @@ function addToPlaylistView(track) {
 
 function trackMenuView() {
   const item = ui.pb?.item;
-  return {
-    title: 'Трек',
-    render(body) {
-      if (!item) { body.append(note('Сейчас ничего не играет')); return; }
-      const img = pickImage(itemImages(item), 300);
-      body.append(el('div', { class: 'hero' }, img ? el('img', { src: img, alt: '' }) : null, heroTitle(item.name, itemArtists(item))));
-      const act = (iconName, title, onClick) => row({ iconName, title, onClick });
-      body.append(el('div', { class: 'list' },
-        act('lyrics', 'Текст песни', () => { closeSheet(); toggleLyrics(true); }),
-        act('plus', 'Добавить в плейлист', () => pushView(addToPlaylistView(item))),
-        act(ui.liked ? 'heartFill' : 'heart', ui.liked ? 'Убрать из любимых' : 'Добавить в любимые', () => { closeSheet(); toggleLike(false); }),
-        (item.artists || []).filter((a) => a.id).map((a) => act('user', 'Артист: ' + a.name, () => pushView(artistView(a)))),
-        item.album?.id ? act('disc', 'Альбом: ' + item.album.name, () => pushView(albumView(item.album))) : null,
-        act('share', 'Поделиться карточкой', () => { closeSheet(); shareCard(); }),
-      ));
-    },
-  };
+  if (!item) return { title: 'Трек', render(body) { body.append(note('Сейчас ничего не играет')); } };
+  return trackActionsView(item, true);
 }
 
 async function openContext() {
@@ -3743,6 +3976,7 @@ async function boot() {
   bindUI();
   document.body.dataset.theme = settings.theme;
   document.body.dataset.glass = settings.glass;
+  document.body.classList.toggle('canvas', !!settings.canvas);
   if (!NATIVE && new URLSearchParams(location.search).get('state')?.startsWith('app-')) { handOffToApp(); return; }
   if (NATIVE) {
     NATIVE.setClientId(Auth.clientId());
