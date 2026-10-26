@@ -1,6 +1,6 @@
 // Кэширует только оболочку приложения, чтобы оно открывалось мгновенно.
 // Запросы к Spotify никогда не кэшируются.
-const CACHE = 'aura-v2';
+const CACHE = 'aura-v3';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -20,7 +20,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(req)
+    fetch(new Request(req.url, { cache: 'no-cache' }))
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
