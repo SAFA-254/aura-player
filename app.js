@@ -753,7 +753,11 @@ function schedulePoll(ms) {
 
 function render(s, fresh) {
   if (fresh) { ui.pb = s; ui.at = Date.now(); }
-  $('#noDevice').hidden = !!s;
+  // Устройство есть, а трека нет дольше 5 секунд — скорее всего, Spotify уснул
+  const stalled = !!s && !s.item && s.currently_playing_type !== 'ad';
+  if (!stalled) ui.stalledSince = 0;
+  else if (!ui.stalledSince) ui.stalledSince = Date.now();
+  setOverlay(!s ? 'none' : stalled && Date.now() - ui.stalledSince > 5000 ? 'asleep' : null, s);
   if (!s) {
     $('#art').classList.add('paused');
     return;
@@ -783,6 +787,33 @@ function render(s, fresh) {
   $('#deviceName').textContent = s.device?.name || 'Устройство';
   updateContext(s);
   updateProgress(true);
+}
+
+function setOverlay(kind, s) {
+  $('#noDevice').hidden = !kind;
+  if (!kind) return;
+  const asleep = kind === 'asleep';
+  $('#ndTitle').textContent = asleep ? 'Spotify не отвечает' : 'Ничего не играет';
+  $('#ndText').textContent = asleep
+    ? `Похоже, телефон усыпил Spotify в фоне («${s?.device?.name || 'устройство'}»). Открой Spotify — музыка пойдёт, и Aura сразу подхватит. Чтобы такого не было: Настройки → Приложения → Spotify → Батарея → «Без ограничений».`
+    : 'Открой Spotify на телефоне или компьютере и включи любой трек — Aura сразу подхватит.';
+  $('#btnRetry').hidden = !asleep;
+  $('#btnOpenLibrary').hidden = asleep;
+}
+
+async function retryWake() {
+  const id = ui.pb?.device?.id;
+  ui.stalledSince = Date.now();
+  setOverlay(null);
+  ui.seq++;
+  try {
+    if (id) await api.transfer(id, true);
+    else await api.play();
+  } catch (e) {
+    handleError(e, false);
+  } finally {
+    schedulePoll(1200);
+  }
 }
 
 function onTrackChange(item) {
@@ -934,10 +965,24 @@ async function command(fn, optimistic) {
   }
 }
 
+// Android мог усыпить Spotify в фоне: команду он принял, но музыка не пошла.
+// Через 2 секунды проверяем и один раз повторяем, указав устройство явно — это часто его будит.
+async function ensureStarted(opts, deviceId) {
+  const seq = ui.seq;
+  await sleep(2000);
+  if (!api || seq !== ui.seq) return;
+  const s = await api.playerState().catch(() => null);
+  if (!api || seq !== ui.seq || (s?.item && s.is_playing)) return;
+  const id = deviceId || s?.device?.id;
+  try { await api.play(opts, id); } catch {}
+  schedulePoll(800);
+}
+
 // Включить что-то: если активного устройства нет — выбираем телефон или первое доступное.
 async function playOn(opts = {}) {
   ui.seq++;
   try {
+    let deviceId = null;
     try {
       await api.play(opts);
     } catch (e) {
@@ -948,8 +993,10 @@ async function playOn(opts = {}) {
         openDevices('Spotify сейчас нигде не открыт. Запусти приложение Spotify на телефоне и попробуй снова.');
         return false;
       }
-      await api.play(opts, target.id);
+      deviceId = target.id;
+      await api.play(opts, deviceId);
     }
+    ensureStarted(opts, deviceId);
     return true;
   } catch (e) {
     handleError(e, false);
@@ -2290,6 +2337,7 @@ function bindUI() {
 
   $('#btnLibrary').addEventListener('click', () => openSheet(libraryView()));
   $('#btnOpenLibrary').addEventListener('click', () => openSheet(libraryView()));
+  $('#btnRetry').addEventListener('click', retryWake);
   $('#btnSearch').addEventListener('click', () => openSheet(searchView()));
   $('#btnQueue').addEventListener('click', () => openSheet(queueView()));
   $('#btnDevices').addEventListener('click', () => openDevices());

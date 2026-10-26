@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
-  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
   <!-- Фон: размытая обложка + градиент из её цветов -->
@@ -116,9 +116,10 @@
     <div id="noDevice" class="no-device" hidden>
       <div class="no-device-card">
         <span class="nd-icon" data-icon="speaker"></span>
-        <h2>Ничего не играет</h2>
-        <p>Открой Spotify на телефоне или компьютере и включи любой трек — Aura сразу подхватит.</p>
+        <h2 id="ndTitle">Ничего не играет</h2>
+        <p id="ndText">Открой Spotify на телефоне или компьютере и включи любой трек — Aura сразу подхватит.</p>
         <a class="btn-primary" href="spotify:" id="openSpotify"><span data-icon="spotify"></span> Открыть Spotify</a>
+        <button class="btn-ghost" id="btnRetry" type="button" hidden>Попробовать ещё раз</button>
         <button class="btn-ghost" id="btnPickDevice" type="button">Выбрать устройство</button>
         <button class="btn-ghost" id="btnOpenLibrary" type="button">Включить из медиатеки</button>
       </div>
@@ -139,6 +140,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
