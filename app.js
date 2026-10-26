@@ -320,7 +320,8 @@ class SpotifyApi {
   topItems(type, range, offset = 0) { return this.req('GET', '/me/top/' + type, { query: { time_range: range, limit: 50, offset } }); }
   recentlyPlayed() { return this.req('GET', '/me/player/recently-played', { query: { limit: 50 } }); }
   artist(id) { return this.req('GET', '/artists/' + id); }
-  artistAlbums(id, offset = 0) { return this.req('GET', `/artists/${id}/albums`, { query: { include_groups: 'album,single', limit: 20, offset } }); }
+  // С 2026 года Spotify отдаёт максимум 10 альбомов за запрос, остальные подгружаются при прокрутке
+  artistAlbums(id, offset = 0) { return this.req('GET', `/artists/${id}/albums`, { query: { include_groups: 'album,single', limit: 10, offset } }); }
   album(id) { return this.req('GET', '/albums/' + id); }
   albumTracks(id, offset = 0) { return this.req('GET', `/albums/${id}/tracks`, { query: { limit: 50, offset } }); }
   createPlaylist(name) { return this.req('POST', '/me/playlists', { body: { name, public: false, description: 'Создан в Aura' } }); }
@@ -1152,7 +1153,7 @@ function pagedList(parent, fetchPage, renderItem, emptyText) {
       done = true;
       list.append(note(e.status === 403 || e.status === 404
         ? 'Spotify не даёт показать этот список.'
-        : 'Не удалось загрузить. Проверь интернет.'));
+        : e.status ? `Spotify не отдал список (ошибка ${e.status}).` : 'Не удалось загрузить. Проверь интернет.'));
     } finally {
       loading = false;
       spin.hidden = true;
