@@ -44,12 +44,17 @@ svg { display: block; }
 .bg-layer {
   position: absolute; inset: -40%;
   background-size: cover; background-position: center;
-  filter: blur(70px) saturate(1.5);
   opacity: 0; transition: opacity 1.4s ease;
   animation: drift 40s linear infinite;
   will-change: transform, opacity;
 }
+/* Обычно обложка уже размыта заранее (в app.js); CSS-размытие — только если картинка без CORS */
+.bg-layer.raw { filter: blur(70px) saturate(1.5); }
 .bg-layer.on { opacity: 0.75; }
+/* Скрытый слой и фон под шторкой/заставкой не анимируем — меньше работы видеокарте */
+.bg-layer:not(.on),
+body:has(.sheet.open) .bg-layer,
+body:has(.no-device:not([hidden])) .bg-layer { animation-play-state: paused; }
 @keyframes drift {
   0%   { transform: rotate(0deg) scale(1.1); }
   50%  { transform: rotate(180deg) scale(1.35); }
@@ -62,7 +67,7 @@ svg { display: block; }
     linear-gradient(180deg, color-mix(in srgb, var(--bg1) 45%, transparent) 0%, color-mix(in srgb, var(--bg2) 92%, transparent) 78%, var(--bg2) 100%);
 }
 .bg-grain {
-  position: absolute; inset: 0; opacity: 0.07; mix-blend-mode: overlay; pointer-events: none;
+  position: absolute; inset: 0; opacity: 0.035; pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 @media (prefers-reduced-motion: reduce) {
@@ -228,9 +233,8 @@ svg { display: block; }
 .chip {
   display: inline-flex; align-items: center; gap: 8px; min-height: 40px; max-width: 60%;
   padding: 0 14px 0 12px; border-radius: 999px;
-  background: var(--glass); border: 1px solid var(--glass-border);
+  background: var(--glass-strong); border: 1px solid var(--glass-border);
   font-size: 13.5px; font-weight: 700; color: var(--text);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
 }
 .chip svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
 .chip span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -380,11 +384,10 @@ svg { display: block; }
   font-size: 27px; font-weight: 800; line-height: 1.28; letter-spacing: -0.015em;
   color: rgba(255, 255, 255, 0.32);
   transform-origin: left center;
-  transition: color 0.35s ease, transform 0.35s ease, filter 0.35s ease;
-  filter: blur(0.4px);
+  transition: color 0.35s ease, transform 0.35s ease;
 }
 .ly-line.past { color: rgba(255, 255, 255, 0.5); }
-.ly-line.active { color: #fff; transform: scale(1.03); filter: none; }
+.ly-line.active { color: #fff; transform: scale(1.03); }
 .ly-line.gap { font-size: 22px; letter-spacing: 0.3em; }
 .ly-plain { white-space: pre-line; font-size: 21px; font-weight: 700; line-height: 1.55; color: rgba(255, 255, 255, 0.85); }
 .ly-note { color: var(--text-2); font-size: 15px; text-align: center; padding: 12px; line-height: 1.5; }

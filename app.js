@@ -35,6 +35,12 @@ const DEFAULT_THEME = { bg1: '#2a1f3d', bg2: '#120e18', accent: '#c9a7ff', onAcc
 const $ = (sel, root = document) => root.querySelector(sel);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+// fetch с тайм-аутом: на мобильной сети запрос может «повиснуть» навсегда, и плеер перестаёт обновляться
+function fetchT(url, opts = {}, ms = 10000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctl.signal }).finally(() => clearTimeout(timer));
+}
 
 const store = {
   get(key, fallback = null) {
@@ -159,11 +165,11 @@ function base64url(bytes) {
 }
 
 async function tokenRequest(params) {
-  const res = await fetch('https://accounts.spotify.com/api/token', {
+  const res = await fetchT('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params),
-  });
+  }, 15000);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(data.error_description || data.error || 'Ошибка авторизации');
@@ -272,7 +278,7 @@ class SpotifyApi {
     if (query) for (const [k, v] of Object.entries(query)) if (v != null) url.searchParams.set(k, v);
     const headers = { Authorization: 'Bearer ' + token };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const res = await fetch(url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+    const res = await fetchT(url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
 
     if (res.status === 401 && retry) {
       await Auth.refresh();
@@ -677,10 +683,24 @@ function applyTheme(t) {
 }
 
 let bgFront = null;
-function setBackground(url) {
+// Размываем обложку один раз на маленьком холсте: CSS-blur(70px) на слое размером в два экрана
+// телефон пересчитывал на каждом кадре анимации фона — отсюда подтормаживания.
+function blurredCover(img) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = c.height = 96;
+    const x = c.getContext('2d');
+    x.filter = 'blur(10px) saturate(1.5)';
+    x.drawImage(img, -16, -16, 128, 128);
+    return c.toDataURL('image/jpeg', 0.85);
+  } catch { return null; }
+}
+function setBackground(url, img) {
   const a = $('#bgA'), b = $('#bgB');
   const next = bgFront === a ? b : a;
-  next.style.backgroundImage = `url("${url}")`;
+  const pre = img && blurredCover(img);
+  next.classList.toggle('raw', !pre);
+  next.style.backgroundImage = `url("${pre || url}")`;
   requestAnimationFrame(() => {
     next.classList.add('on');
     if (bgFront) bgFront.classList.remove('on');
@@ -708,6 +728,7 @@ const ui = {
   timer: null,
   raf: 0,
   lastSec: -1,
+  lastV: -1,
   lastErrorAt: 0,
   contextNames: new Map(),
 };
@@ -851,7 +872,7 @@ function loadCover(url) {
     cover.crossOrigin = 'anonymous';
     cover.src = url;
     cover.classList.remove('loading');
-    setBackground(url);
+    setBackground(url, img);
     applyTheme(buildTheme(extractPalette(img)));
   };
   img.onerror = () => {
@@ -929,9 +950,12 @@ function updateProgress(force) {
   const seek = $('#seek');
   if (!ui.seeking) {
     const pos = currentPos();
-    const v = dur ? (pos / dur) * 1000 : 0;
-    seek.value = v;
-    seek.style.setProperty('--p', v / 10 + '%');
+    const v = dur ? Math.round((pos / dur) * 1000) : 0;
+    if (force || v !== ui.lastV) {
+      ui.lastV = v;
+      seek.value = v;
+      seek.style.setProperty('--p', v / 10 + '%');
+    }
     const sec = Math.floor(pos / 1000);
     if (force || sec !== ui.lastSec) {
       ui.lastSec = sec;
@@ -1588,7 +1612,7 @@ async function fetchLyrics(item) {
   if (api.isDemo) return api.demoLyrics(item);
   const artist = item.artists?.[0]?.name || '';
   const duration = Math.round(item.duration_ms / 1000);
-  const exact = await fetch('https://lrclib.net/api/get?' + new URLSearchParams({
+  const exact = await fetchT('https://lrclib.net/api/get?' + new URLSearchParams({
     track_name: item.name, artist_name: artist, album_name: item.album?.name || '', duration,
   })).catch(() => null);
   if (exact?.ok) {
@@ -1596,7 +1620,7 @@ async function fetchLyrics(item) {
     if (d.syncedLyrics || d.plainLyrics || d.instrumental) return d;
   }
   // Точного совпадения нет (или сервис ответил ошибкой) — ищем по упрощённому названию
-  const res = await fetch('https://lrclib.net/api/search?' + new URLSearchParams({ track_name: cleanTitle(item.name), artist_name: artist }));
+  const res = await fetchT('https://lrclib.net/api/search?' + new URLSearchParams({ track_name: cleanTitle(item.name), artist_name: artist }));
   if (!res.ok) throw new Error('lrclib ' + res.status);
   const list = (await res.json()) || [];
   const close = list.filter((x) => Math.abs((x.duration || 0) - duration) <= 4);
@@ -1671,9 +1695,12 @@ function syncLyrics(force) {
   if (i >= 0 && lyr.lines[i].t > pos) i = -1; // перемотали назад
   while (i + 1 < lyr.lines.length && lyr.lines[i + 1].t <= pos) i++;
   if (i === lyr.idx && !force) return;
+  const prev = lyr.idx;
   lyr.idx = i;
   const nodes = $('#lyricsInner').children;
-  for (let k = 0; k < lyr.lines.length; k++) {
+  // Обычно сдвиг на одну строку — трогаем только изменившиеся, а не весь текст
+  const from = force ? 0 : Math.max(0, Math.min(prev, i)), to = force ? lyr.lines.length - 1 : Math.max(prev, i);
+  for (let k = from; k <= to; k++) {
     nodes[k].classList.toggle('active', k === i);
     nodes[k].classList.toggle('past', k < i);
   }
@@ -1967,8 +1994,10 @@ function stopMic() {
   viz.stream = viz.actx = viz.analyser = null;
 }
 
-function drawViz() {
+function drawViz(now) {
   viz.raf = requestAnimationFrame(drawViz);
+  if (now && now - (viz.lastFrame || 0) < 30) return; // ~30 кадров/с хватает глазу и бережёт батарею
+  viz.lastFrame = now || 0;
   const c = $('#viz');
   const w = c.clientWidth, h = c.clientHeight;
   if (!w || !h) return; // скрыт (например, открыт текст песни)
