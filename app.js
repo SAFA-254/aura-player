@@ -885,6 +885,15 @@ function setOverlay(kind, s) {
    на компьютерах, поэтому на телефоне это эксперимент. */
 const local = { player: null, deviceId: null, status: 'off', error: '', playing: false, waiters: [], render: null };
 
+// Короткий журнал плеера: когда свернули/развернули, когда встало воспроизведение
+function localLog(text) {
+  const log = store.get('playerLog', []);
+  log.push(new Date().toLocaleTimeString('ru-RU') + '  ' + text);
+  store.set('playerLog', log.slice(-40));
+  local.render?.();
+}
+document.addEventListener('visibilitychange', () => { if (settings.playInAura) localLog(document.hidden ? 'Aura свёрнута' : 'Aura открыта'); });
+
 function hasStreamingScope() {
   const t = store.get('token');
   return !t?.scope || t.scope.split(' ').includes('streaming');
@@ -926,8 +935,9 @@ function initLocalPlayer() {
     getOAuthToken: (cb) => { Auth.accessToken().then((t) => t && cb(t)); },
     volume: 1,
   });
-  p.addListener('ready', ({ device_id }) => { local.deviceId = device_id; setLocalStatus('ready'); });
-  p.addListener('not_ready', () => { local.deviceId = null; setLocalStatus('offline'); });
+  p.addListener('ready', ({ device_id }) => { local.deviceId = device_id; setLocalStatus('ready'); localLog('плеер готов'); });
+  p.addListener('not_ready', () => { local.deviceId = null; setLocalStatus('offline'); localLog('плеер отключился'); });
+  p.addListener('autoplay_failed', () => localLog('браузер не дал начать звук без нажатия'));
   const errors = {
     initialization_error: 'этот браузер не поддерживает плеер Spotify',
     authentication_error: 'нужно войти заново',
@@ -937,6 +947,7 @@ function initLocalPlayer() {
   for (const [ev, text] of Object.entries(errors)) {
     p.addListener(ev, ({ message }) => {
       console.warn(ev, message);
+      localLog(`${ev}: ${message}`);
       if (ev === 'playback_error' && local.status === 'ready') { toast('Плеер Aura: ' + text); return; }
       setLocalStatus('error', `${text} (${message})`);
     });
@@ -945,6 +956,7 @@ function initLocalPlayer() {
     const playing = !!st && !st.paused;
     if (playing !== local.playing) {
       local.playing = playing;
+      localLog(playing ? 'играет' : 'пауза' + (document.hidden ? ' (Aura свёрнута)' : ''));
       NATIVE?.localPlayback?.(playing);
       local.render?.();
     }
@@ -1017,6 +1029,15 @@ function localCard() {
         parts.push(el('button', { class: 'btn-primary', type: 'button', onclick: () => playHere() }, 'Переключить музыку в Aura'));
       } else if (local.status === 'error') {
         parts.push(el('button', { class: 'btn-ghost', type: 'button', onclick: () => { stopLocalPlayer(); loadLocalPlayer(); } }, 'Попробовать снова'));
+      }
+    }
+    if (settings.playInAura) {
+      const log = store.get('playerLog', []);
+      if (log.length) {
+        parts.push(el('details', { class: 'player-log' },
+          el('summary', {}, 'Журнал плеера'),
+          el('pre', {}, log.slice().reverse().join('\n')),
+          el('button', { class: 'btn-ghost', type: 'button', onclick: () => { store.set('playerLog', []); local.render(); } }, 'Очистить')));
       }
     }
     card.replaceChildren(...parts);

@@ -38,7 +38,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         catchCrashes()
-        web = WebView(this)
+        web = PlayerWebView(this)
         web.setBackgroundColor(Color.parseColor("#120e18"))
         setContentView(web)
 
@@ -50,6 +50,12 @@ class MainActivity : Activity() {
         }
         web.addJavascriptInterface(Bridge(), "AuraNative")
         web.webViewClient = object : WebViewClient() {
+            // Процесс страницы упал (например, Android выгрузил его) — перезагружаем, а не падаем целиком
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                runOnUiThread { recreate() }
+                return true
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (isOwnPage(request.url)) return false
                 openExternal(request.url.toString())
@@ -480,6 +486,20 @@ class MainActivity : Activity() {
         }
     }
 
+
+    /**
+     * Свёрнутая Aura сообщает WebView «окно скрыто», и он ставит музыку на паузу.
+     * Пока музыка играет в самой Aura, делаем вид, что окно по-прежнему видно.
+     */
+    private class PlayerWebView(ctx: android.content.Context) : WebView(ctx) {
+        override fun onWindowVisibilityChanged(visibility: Int) {
+            if (NowBar.localPlayback && visibility != android.view.View.VISIBLE) {
+                super.onWindowVisibilityChanged(android.view.View.VISIBLE)
+            } else {
+                super.onWindowVisibilityChanged(visibility)
+            }
+        }
+    }
 
     companion object {
         const val HOST = "safa-254.github.io"

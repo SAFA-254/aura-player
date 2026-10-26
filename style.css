@@ -538,3 +538,7 @@ a.btn-primary { text-decoration: none; }
 .upd-banner .upd-close svg { width: 18px; height: 18px; }
 .band { display: flex; justify-content: space-between; margin-top: 12px; color: var(--text-2); font-size: 13px; }
 .band-val { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.player-log { margin-top: 12px; color: var(--text-2); font-size: 13px; }
+.player-log summary { cursor: pointer; font-weight: 700; }
+.player-log pre { white-space: pre-wrap; font-size: 12px; line-height: 1.5; margin: 8px 0 0; user-select: text; max-height: 240px; overflow: auto; }
