@@ -105,9 +105,7 @@ class Spotify(private val ctx: Context) {
                 if (e.status != 404) throw e
             }
         }
-        val id = wakePhone() ?: throw ApiException(404, "Spotify на телефоне не отвечает")
-        if (shuffle) try { req("PUT", "/me/player/shuffle?state=true&device_id=$id") } catch (_: Exception) {}
-        req("PUT", "/me/player/play?device_id=$id", body)
+        playOnPhone(body, shuffle) ?: throw ApiException(404, "Spotify на телефоне не отвечает")
     }
 
     private fun withWake(action: () -> Unit) {
@@ -120,19 +118,41 @@ class Spotify(private val ctx: Context) {
         }
     }
 
+    /** Разбудить Spotify и продолжить музыку на телефоне. Возвращает device_id или null. */
+    fun wakePhone(timeoutMs: Long = 12_000): String? = playOnPhone(null, false, timeoutMs)
+
     /**
-     * Будит приложение Spotify кнопкой «Play», как это делают проводные наушники,
-     * и ждёт, пока телефон появится в списке устройств. Возвращает его device_id.
+     * Включает музыку на телефоне и проверяет, что она действительно заиграла:
+     * уснувший Spotify может числиться в устройствах, но не реагировать на команды.
      */
-    fun wakePhone(timeoutMs: Long = 12_000): String? {
-        phoneDevice()?.let { return it }
+    fun playOnPhone(body: JSONObject?, shuffle: Boolean, timeoutMs: Long = 12_000): String? {
+        phoneDevice()?.let { id ->
+            tryPlay(id, body, shuffle)
+            waitPlaying(3500)?.let { return it }
+        }
+        // Будим кнопкой «Play», как это делают проводные наушники
+        pressPlay()
+        val id = waitPhone(timeoutMs) ?: return null
+        if (body != null || shuffle) tryPlay(id, body, shuffle)
+        waitPlaying(5000)?.let { return it }
+        tryPlay(id, body, shuffle)
+        return waitPlaying(4000)
+    }
+
+    fun pressPlay() {
         for (action in intArrayOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
             val i = Intent(Intent.ACTION_MEDIA_BUTTON)
                 .setPackage(SPOTIFY_PACKAGE)
+                // Без этого флага Android не доставит сигнал Spotify, если его остановила система
+                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
                 .putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(action, KeyEvent.KEYCODE_MEDIA_PLAY))
             ctx.sendBroadcast(i)
         }
-        return waitPhone(timeoutMs)
+    }
+
+    fun tryPlay(id: String, body: JSONObject?, shuffle: Boolean) {
+        if (shuffle) try { req("PUT", "/me/player/shuffle?state=true&device_id=$id") } catch (_: Exception) {}
+        try { req("PUT", "/me/player/play?device_id=$id", body) } catch (_: Exception) {}
     }
 
     /** Ждёт, пока телефон появится в списке устройств Spotify. */
@@ -143,6 +163,20 @@ class Spotify(private val ctx: Context) {
             phoneDevice()?.let { return it }
         }
         return null
+    }
+
+    /** Ждёт, пока на телефоне реально заиграет трек. Возвращает device_id телефона. */
+    fun waitPlaying(timeoutMs: Long): String? {
+        val until = SystemClock.elapsedRealtime() + timeoutMs
+        while (true) {
+            val s = try { state() } catch (_: Exception) { null }
+            val dev = s?.optJSONObject("device")
+            if (s?.optJSONObject("item") != null && s.optBoolean("is_playing") && dev?.optString("type") == "Smartphone") {
+                return dev.optString("id")
+            }
+            if (SystemClock.elapsedRealtime() >= until) return null
+            Thread.sleep(1000)
+        }
     }
 
     private fun phoneDevice(): String? {

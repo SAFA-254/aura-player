@@ -290,12 +290,13 @@ class MainActivity : Activity() {
         fun wakeSpotify() {
             Thread {
                 val sp = Spotify(this@MainActivity)
-                var id = try { sp.wakePhone(7000) } catch (_: Exception) { null }
+                var id = try { sp.playOnPhone(null, false, 7000) } catch (_: Exception) { null }
                 val launch = packageManager.getLaunchIntentForPackage(Spotify.SPOTIFY_PACKAGE)
                 if (id == null && launch != null) {
                     runOnUiThread { try { startActivity(launch) } catch (_: Exception) {} }
-                    id = try { sp.waitPhone(12_000) } catch (_: Exception) { null }
-                    // Из фона Android пускает обратно, только если у Aura есть «Поверх других приложений»
+                    val dev = try { sp.waitPhone(12_000) } catch (_: Exception) { null }
+                    // Возвращаемся сразу, как Spotify запустился: так Android охотнее пускает обратно.
+                    // Из фона гарантированно можно только с разрешением «Поверх других приложений».
                     runOnUiThread {
                         try {
                             startActivity(
@@ -304,6 +305,10 @@ class MainActivity : Activity() {
                             )
                         } catch (_: Exception) {
                         }
+                    }
+                    if (dev != null) {
+                        sp.tryPlay(dev, null, false)
+                        id = sp.waitPlaying(5000) ?: dev
                     }
                 }
                 val arg = if (id == null) "null" else org.json.JSONObject.quote(id)

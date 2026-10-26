@@ -1,6 +1,6 @@
 // Кэширует только оболочку приложения, чтобы оно открывалось мгновенно.
 // Запросы к Spotify никогда не кэшируются.
-const CACHE = 'aura-v14';
+const CACHE = 'aura-v15';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

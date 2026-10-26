@@ -816,6 +816,8 @@ function render(s, fresh) {
   const stalled = !!s && !s.item && s.currently_playing_type !== 'ad';
   if (!stalled) ui.stalledSince = 0;
   else if (!ui.stalledSince) ui.stalledSince = Date.now();
+  // В приложении не ждём 5 секунд: Spotify уснул — сразу будим (один раз за запуск)
+  if (stalled && NATIVE && settings.autoWake && !ui.autoWoke && !waker.busy && !api.isDemo) wakeAndPlay();
   setOverlay(!s ? 'none' : stalled && Date.now() - ui.stalledSince > 5000 ? 'asleep' : null, s);
   if (!s) {
     $('#art').classList.add('paused');
@@ -853,20 +855,22 @@ function setOverlay(kind, s) {
   $('#noDevice').hidden = !kind;
   if (!kind) return;
   // В приложении сами поднимаем Spotify, если нигде ничего не играет (один раз за запуск)
-  if (NATIVE && kind === 'none' && settings.autoWake && !ui.autoWoke && !api?.isDemo) {
+  if (NATIVE && settings.autoWake && !ui.autoWoke && !waker.busy && !api?.isDemo) {
     ui.autoWoke = true;
     wakeAndPlay();
   }
   $('#btnWake').hidden = !NATIVE;
   $('#openSpotify').hidden = !!NATIVE;
   const asleep = kind === 'asleep';
-  $('#ndTitle').textContent = asleep ? 'Spotify не отвечает' : 'Ничего не играет';
+  $('#ndTitle').textContent = asleep ? (NATIVE ? 'Spotify уснул' : 'Spotify не отвечает') : 'Ничего не играет';
   $('#ndText').textContent = NATIVE
-    ? (waker.busy ? 'Запускаю Spotify на телефоне…' : 'Spotify на телефоне не запущен. Aura может включить его сама.')
+    ? (waker.busy ? 'Бужу Spotify на телефоне… Если не выйдет, Aura на секунду откроет его.'
+      : asleep ? 'Телефон усыпил Spotify в фоне. Aura разбудит его — нажми «Включить музыку».'
+      : 'Spotify на телефоне не запущен. Aura может включить его сама.')
     : asleep
     ? `Похоже, телефон усыпил Spotify в фоне («${s?.device?.name || 'устройство'}»). Открой Spotify — музыка пойдёт, и Aura сразу подхватит. Чтобы такого не было: Настройки → Приложения → Spotify → Батарея → «Без ограничений».`
     : 'Открой Spotify на телефоне или компьютере и включи любой трек — Aura сразу подхватит.';
-  $('#btnRetry').hidden = !asleep;
+  $('#btnRetry').hidden = !asleep || !!NATIVE;
   $('#btnOpenLibrary').hidden = asleep;
 }
 
@@ -891,6 +895,7 @@ function wakePhone() {
 async function wakeAndPlay(opts = {}) {
   if (!NATIVE || !api) return false;
   ui.seq++;
+  ui.autoWoke = true;
   toast('Запускаю Spotify…');
   if (!$('#noDevice').hidden) setOverlay(ui.pb ? 'asleep' : 'none', ui.pb);
   const id = await wakePhone();
@@ -1355,6 +1360,8 @@ function handleError(e, fromPoll) {
 function togglePlay() {
   const pb = ui.pb;
   if (!pb) { playOn({}); return; }
+  // Устройство есть, а трека нет — Spotify уснул, команды до него не доходят: будим
+  if (NATIVE && !pb.item && pb.currently_playing_type !== 'ad') { wakeAndPlay(); return; }
   const playing = pb.is_playing;
   command(() => (playing ? api.pause() : api.play()), (s) => { s.is_playing = !playing; });
 }
