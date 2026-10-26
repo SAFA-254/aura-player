@@ -69,7 +69,8 @@ object SonyAnc {
         private var seq = 0
 
         init {
-            BluetoothAdapter.getDefaultAdapter()?.cancelDiscovery()
+            // Поиск устройств мешает подключению, но на новых Android для его остановки нужно ещё одно разрешение
+            try { BluetoothAdapter.getDefaultAdapter()?.cancelDiscovery() } catch (_: SecurityException) {}
             val v2 = dev.uuids?.any { it.uuid == UUID_V2 } ?: true
             socket = dev.createRfcommSocketToServiceRecord(if (v2) UUID_V2 else UUID_V1)
             try {
