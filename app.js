@@ -2701,7 +2701,7 @@ function settingsView() {
       body.append(el('div', { class: 'settings-card' },
         el('h3', {}, 'Тема'),
         el('p', {}, 'Цвета всё равно подстраиваются под обложку.'),
-        chipGroup([['aura', 'Аура'], ['vinyl', 'Винил'], ['neon', 'Неон'], ['minimal', 'Минимализм']], settings.theme, (v) => {
+        chipGroup([['aura', 'Аура'], ['glass', 'Стекло'], ['vinyl', 'Винил'], ['neon', 'Неон'], ['minimal', 'Минимализм']], settings.theme, (v) => {
           settings.theme = v;
           saveSettings();
           applyLook();
