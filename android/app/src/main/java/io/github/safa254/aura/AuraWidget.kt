@@ -52,6 +52,15 @@ class AuraWidget : AppWidgetProvider() {
             super.onReceive(ctx, intent)
             return
         }
+        // Есть доступ к плееру Spotify на телефоне — управляем им напрямую, мгновенно
+        MediaListener.controller()?.let { c ->
+            when (action) {
+                ACTION_PREV -> c.transportControls.skipToPrevious()
+                ACTION_NEXT -> c.transportControls.skipToNext()
+                ACTION_TOGGLE -> MediaListener.toggle(c)
+            }
+            return
+        }
         if (action == ACTION_TOGGLE) {
             // Сразу меняем значок, не дожидаясь Spotify
             val s = cached(ctx)
@@ -127,6 +136,29 @@ class AuraWidget : AppWidgetProvider() {
             }
         }
 
+        /** Состояние прямо от плеера Spotify на телефоне (через MediaListener). */
+        fun fromMedia(ctx: Context, title: String, artist: String, art: Bitmap?, playing: Boolean, end: Long) {
+            if (ids(ctx).isEmpty()) return
+            IO.execute {
+                val old = cached(ctx)
+                val key = "media:$title|$artist"
+                var cover = old.optString("cover")
+                if (art != null && cover != key) {
+                    try {
+                        coverFile(ctx).outputStream().use { art.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                        cover = key
+                    } catch (_: Exception) {
+                    }
+                }
+                val s = JSONObject()
+                    .put("title", title).put("artist", artist).put("cover", cover)
+                    .put("playing", playing).put("accent", old.optString("accent")).put("end", end)
+                save(ctx, s)
+                render(ctx)
+                scheduleTrackEnd(ctx, s)
+            }
+        }
+
         fun refreshAsync(ctx: Context) {
             if (ids(ctx).isEmpty()) return
             IO.execute { refresh(ctx) }
@@ -135,6 +167,9 @@ class AuraWidget : AppWidgetProvider() {
         /** Спросить Spotify, что играет, и перерисовать. Только из фонового потока. */
         fun refresh(ctx: Context) {
             if (ids(ctx).isEmpty()) return
+            MediaListener.instance?.let { l ->
+                if (MediaListener.controller() != null) { MAIN.post { l.update() }; return }
+            }
             val old = cached(ctx)
             val s = JSONObject().put("accent", old.optString("accent"))
             try {

@@ -281,6 +281,37 @@ class MainActivity : Activity() {
             }
         }
 
+        // Карточка Aura в Now Bar вместо Spotify
+        @JavascriptInterface
+        fun mediaAccess(): Boolean = MediaListener.hasAccess(this@MainActivity)
+
+        @JavascriptInterface
+        fun openMediaAccess() = openSettings(
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).putExtra(
+                Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                android.content.ComponentName(this@MainActivity, MediaListener::class.java).flattenToString(),
+            ),
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS),
+        )
+
+        @JavascriptInterface
+        fun openAppInfo() = openSettings(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+
+        @JavascriptInterface
+        fun openSpotifyNotifications() = openSettings(
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, Spotify.SPOTIFY_PACKAGE),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + Spotify.SPOTIFY_PACKAGE)),
+        )
+
+        @JavascriptInterface
+        fun getMirror(): Boolean = MediaListener.enabled(this@MainActivity)
+
+        @JavascriptInterface
+        fun setMirror(on: Boolean) {
+            askNotifications()
+            MediaListener.setEnabled(this@MainActivity, on)
+        }
+
         /** mode: "" — только узнать режим, "nc" | "ambient" | "off". Ответ придёт в window.auraSony(). */
         @JavascriptInterface
         fun sony(mode: String, level: Int, voice: String) {
@@ -298,6 +329,16 @@ class MainActivity : Activity() {
                 }
                 runOnUiThread { web.evaluateJavascript("window.auraSony && window.auraSony($res)", null) }
             }.start()
+        }
+    }
+
+    private fun openSettings(vararg intents: Intent) = runOnUiThread {
+        for (i in intents) {
+            try {
+                startActivity(i)
+                return@runOnUiThread
+            } catch (_: Exception) {
+            }
         }
     }
 

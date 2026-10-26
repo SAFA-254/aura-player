@@ -1106,6 +1106,40 @@ function sonyCard() {
   return card;
 }
 
+/* ---------- Карточка Aura в Now Bar (только в приложении) ---------- */
+function nowBarCard() {
+  const card = el('div', { class: 'settings-card' });
+  const draw = () => {
+    const access = NATIVE.mediaAccess();
+    const parts = [
+      el('h3', {}, 'Aura в Now Bar и шторке'),
+      el('p', {}, 'Карточка с треком и кнопками от имени Aura: нажатие открывает Aura, а не Spotify. Виджет тоже начнёт обновляться мгновенно.'),
+    ];
+    if (!access) {
+      parts.push(
+        el('ol', {},
+          el('li', {}, 'Нажми «Дать доступ» и включи Aura в списке «Доступ к уведомлениям».'),
+          el('li', {}, 'Если переключатель серый и пишет «Ограниченная настройка»: «Сведения о приложении» → ⋮ сверху → «Разрешить ограниченные настройки», потом снова «Дать доступ».')),
+        el('button', { class: 'btn-primary', type: 'button', onclick: () => NATIVE.openMediaAccess() }, 'Дать доступ'),
+        el('button', { class: 'btn-ghost', type: 'button', onclick: () => NATIVE.openAppInfo() }, 'Сведения о приложении'));
+    } else {
+      parts.push(
+        switchRow('Показывать карточку Aura', NATIVE.getMirror(), (on) => NATIVE.setMirror(on)),
+        el('p', { style: 'margin-top:12px' }, 'Чтобы карточек не было две, скрой карточку Spotify: в настройках уведомлений Spotify выключи уведомления о воспроизведении. Музыка продолжит играть.'),
+        el('button', { class: 'btn-ghost', type: 'button', onclick: () => NATIVE.openSpotifyNotifications() }, 'Уведомления Spotify'));
+    }
+    card.replaceChildren(...parts);
+  };
+  draw();
+  // Вернулись из настроек Android — показываем актуальное состояние
+  const onVisible = () => {
+    if (!card.isConnected) { document.removeEventListener('visibilitychange', onVisible); return; }
+    if (!document.hidden) draw();
+  };
+  document.addEventListener('visibilitychange', onVisible);
+  return card;
+}
+
 /* ---------- Будильник (только в приложении) ---------- */
 const DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
@@ -1709,6 +1743,7 @@ function settingsView() {
               NATIVE.openOverlaySettings();
             }
           })));
+        body.append(nowBarCard());
         if (hp.cur?.sony) body.append(sonyCard());
         body.append(alarmCard());
       }
