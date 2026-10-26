@@ -281,6 +281,36 @@ class MainActivity : Activity() {
             }
         }
 
+        /**
+         * Поднять Spotify на телефоне, чтобы Aura могла играть без ручного запуска Spotify.
+         * Сначала будим в фоне кнопкой «Play»; не вышло — на секунду открываем Spotify и возвращаемся.
+         * Ответ — device_id телефона или null — придёт в window.auraWoke().
+         */
+        @JavascriptInterface
+        fun wakeSpotify() {
+            Thread {
+                val sp = Spotify(this@MainActivity)
+                var id = try { sp.wakePhone(7000) } catch (_: Exception) { null }
+                val launch = packageManager.getLaunchIntentForPackage(Spotify.SPOTIFY_PACKAGE)
+                if (id == null && launch != null) {
+                    runOnUiThread { try { startActivity(launch) } catch (_: Exception) {} }
+                    id = try { sp.waitPhone(12_000) } catch (_: Exception) { null }
+                    // Из фона Android пускает обратно, только если у Aura есть «Поверх других приложений»
+                    runOnUiThread {
+                        try {
+                            startActivity(
+                                Intent(this@MainActivity, MainActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+                            )
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+                val arg = if (id == null) "null" else org.json.JSONObject.quote(id)
+                runOnUiThread { web.evaluateJavascript("window.auraWoke && window.auraWoke($arg)", null) }
+            }.start()
+        }
+
         // Карточка Aura в Now Bar вместо Spotify
         /** Объявлен ли в этой сборке сервис доступа к уведомлениям. */
         @JavascriptInterface

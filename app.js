@@ -852,16 +852,64 @@ function render(s, fresh) {
 function setOverlay(kind, s) {
   $('#noDevice').hidden = !kind;
   if (!kind) return;
+  // В приложении сами поднимаем Spotify, если нигде ничего не играет (один раз за запуск)
+  if (NATIVE && kind === 'none' && settings.autoWake && !ui.autoWoke && !api?.isDemo) {
+    ui.autoWoke = true;
+    wakeAndPlay();
+  }
+  $('#btnWake').hidden = !NATIVE;
+  $('#openSpotify').hidden = !!NATIVE;
   const asleep = kind === 'asleep';
   $('#ndTitle').textContent = asleep ? 'Spotify не отвечает' : 'Ничего не играет';
-  $('#ndText').textContent = asleep
+  $('#ndText').textContent = NATIVE
+    ? (waker.busy ? 'Запускаю Spotify на телефоне…' : 'Spotify на телефоне не запущен. Aura может включить его сама.')
+    : asleep
     ? `Похоже, телефон усыпил Spotify в фоне («${s?.device?.name || 'устройство'}»). Открой Spotify — музыка пойдёт, и Aura сразу подхватит. Чтобы такого не было: Настройки → Приложения → Spotify → Батарея → «Без ограничений».`
     : 'Открой Spotify на телефоне или компьютере и включи любой трек — Aura сразу подхватит.';
   $('#btnRetry').hidden = !asleep;
   $('#btnOpenLibrary').hidden = asleep;
 }
 
+/* ---------- Запуск Spotify из Aura (только в приложении) ---------- */
+const waker = { busy: false, waiters: [] };
+
+window.auraWoke = (id) => {
+  waker.busy = false;
+  waker.waiters.splice(0).forEach((f) => f(id || null));
+};
+
+// Поднимает Spotify на телефоне и возвращает его device_id (или null)
+function wakePhone() {
+  return new Promise((resolve) => {
+    waker.waiters.push(resolve);
+    if (waker.busy) return;
+    waker.busy = true;
+    NATIVE.wakeSpotify();
+  });
+}
+
+async function wakeAndPlay(opts = {}) {
+  if (!NATIVE || !api) return false;
+  ui.seq++;
+  toast('Запускаю Spotify…');
+  if (!$('#noDevice').hidden) setOverlay(ui.pb ? 'asleep' : 'none', ui.pb);
+  const id = await wakePhone();
+  if (!api) return false;
+  if (!id) {
+    toast('Spotify не запустился. Открой его вручную — Aura подхватит');
+    schedulePoll(500);
+    return false;
+  }
+  try {
+    if (Object.keys(opts).length) await api.play(opts, id);
+    else await api.transfer(id, true);
+  } catch {}
+  schedulePoll(900);
+  return true;
+}
+
 async function retryWake() {
+  if (NATIVE) { setOverlay(null); wakeAndPlay(); return; }
   const id = ui.pb?.device?.id;
   ui.stalledSince = Date.now();
   setOverlay(null);
@@ -1253,6 +1301,7 @@ async function playOn(opts = {}) {
       if (e.status !== 404) throw e;
       const devs = await api.devices();
       const target = devs.find((d) => d.is_active) || devs.find((d) => d.type === 'Smartphone') || devs[0];
+      if (!target && NATIVE) return await wakeAndPlay(opts);
       if (!target) {
         openDevices('Spotify сейчас нигде не открыт. Запусти приложение Spotify на телефоне и попробуй снова.');
         return false;
@@ -1279,7 +1328,8 @@ function handleError(e, fromPoll) {
     return;
   }
   if (e.status === 404) {
-    if (!fromPoll) openDevices('Выбери, где играть музыку');
+    if (!fromPoll && NATIVE) wakeAndPlay();
+    else if (!fromPoll) openDevices('Выбери, где играть музыку');
     return;
   }
   if (e.status === 403) {
@@ -1727,6 +1777,10 @@ function settingsView() {
         })));
 
       if (NATIVE) {
+        body.append(el('div', { class: 'settings-card' },
+          el('h3', {}, 'Spotify'),
+          el('p', {}, 'Aura сама запускает Spotify на телефоне — открывать его заранее не нужно.'),
+          switchRow('Сразу включать музыку, если ничего не играет', settings.autoWake, (on) => { settings.autoWake = on; saveSettings(); })));
         const auto = JSON.parse(NATIVE.getAuto());
         const saveAuto = () => NATIVE.setAuto(JSON.stringify(auto));
         body.append(el('div', { class: 'settings-card' },
@@ -2316,7 +2370,7 @@ function drawViz(now) {
 /* =====================================================================
    Внешний вид, экран
    ===================================================================== */
-const settings = Object.assign({ theme: 'aura', viz: 'auto', wakeLock: false }, store.get('settings', {}));
+const settings = Object.assign({ theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true }, store.get('settings', {}));
 function saveSettings() { store.set('settings', settings); }
 function applyLook() {
   document.body.dataset.theme = settings.theme;
@@ -2639,6 +2693,7 @@ function bindUI() {
   $('#btnLibrary').addEventListener('click', () => openSheet(libraryView()));
   $('#btnOpenLibrary').addEventListener('click', () => openSheet(libraryView()));
   $('#btnRetry').addEventListener('click', retryWake);
+  $('#btnWake').addEventListener('click', () => { setOverlay(null); wakeAndPlay(); });
   $('#btnSearch').addEventListener('click', () => openSheet(searchView()));
   $('#btnQueue').addEventListener('click', () => openSheet(queueView()));
   $('#btnDevices').addEventListener('click', () => openDevices());

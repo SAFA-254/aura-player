@@ -124,7 +124,7 @@ class Spotify(private val ctx: Context) {
      * Будит приложение Spotify кнопкой «Play», как это делают проводные наушники,
      * и ждёт, пока телефон появится в списке устройств. Возвращает его device_id.
      */
-    fun wakePhone(): String? {
+    fun wakePhone(timeoutMs: Long = 12_000): String? {
         phoneDevice()?.let { return it }
         for (action in intArrayOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
             val i = Intent(Intent.ACTION_MEDIA_BUTTON)
@@ -132,9 +132,14 @@ class Spotify(private val ctx: Context) {
                 .putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(action, KeyEvent.KEYCODE_MEDIA_PLAY))
             ctx.sendBroadcast(i)
         }
-        val until = SystemClock.elapsedRealtime() + 12_000
+        return waitPhone(timeoutMs)
+    }
+
+    /** Ждёт, пока телефон появится в списке устройств Spotify. */
+    fun waitPhone(timeoutMs: Long): String? {
+        val until = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < until) {
-            Thread.sleep(1500)
+            Thread.sleep(1200)
             phoneDevice()?.let { return it }
         }
         return null
