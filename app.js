@@ -521,7 +521,8 @@ class DemoApi {
       else this.list = found ? found._tracks : this.tracks;
       if (!this.list.length) this.list = this.tracks;
       this.ctx = { type, uri: opts.context_uri };
-      this._jump(opts.offset?.position || 0);
+      const byUri = opts.offset?.uri ? this.list.findIndex((t) => t.uri === opts.offset.uri) : -1;
+      this._jump(byUri >= 0 ? byUri : opts.offset?.position || 0);
     } else if (opts.uris) {
       this.list = opts.uris.map((u) => this.tracks.find((t) => t.uri === u)).filter(Boolean);
       this.ctx = null;
@@ -1709,7 +1710,19 @@ async function ensureStarted(opts, deviceId) {
 }
 
 // Включить что-то: если активного устройства нет — выбираем телефон или первое доступное.
-async function playOn(opts = {}) {
+// shuffle: true/false — включить/выключить перемешивание (как кнопки «Вперемешку»/«Слушать»).
+// Ставим его до старта (тогда Spotify сам начнёт со случайного трека) и подтверждаем после:
+// если до старта активного устройства не было, первая попытка не сработает.
+async function playOn(opts = {}, shuffle = null) {
+  if (shuffle != null) await setShuffleQuiet(shuffle);
+  const ok = await startPlayback(opts);
+  if (ok && shuffle != null) {
+    try { await api.shuffle(shuffle); if (ui.pb) ui.pb.shuffle_state = shuffle; } catch {}
+  }
+  return ok;
+}
+
+async function startPlayback(opts) {
   ui.seq++;
   try {
     let deviceId = null;
@@ -2157,8 +2170,7 @@ function shelf(title, cards) {
 }
 
 async function playContext(uri, shuffle) {
-  await setShuffleQuiet(shuffle);
-  if (await playOn({ context_uri: uri })) closeSheet();
+  if (await playOn({ context_uri: uri }, shuffle)) closeSheet();
 }
 
 function homeView() {
@@ -2250,9 +2262,14 @@ function playlistView(p) {
           el('div', { class: 'row-sub' }, p.owner?.display_name || '')),
         el('div', { class: 'hero-actions' },
           el('button', { class: 'btn-primary', type: 'button', html: icon('play') + 'Слушать',
-            onclick: async () => { await setShuffleQuiet(false); if (await playOn({ context_uri: p.uri })) closeSheet(); } }),
+            onclick: async () => { if (await playOn({ context_uri: p.uri, offset: { position: 0 } }, false)) closeSheet(); } }),
           el('button', { class: 'btn-ghost', type: 'button', html: icon('shuffle') + 'Вперемешку',
-            onclick: async () => { await setShuffleQuiet(true); if (await playOn({ context_uri: p.uri })) closeSheet(); } }),
+            onclick: async () => {
+              // Начинаем со случайного трека, а не всегда с первого
+              const total = (p.items || p.tracks)?.total || 0;
+              const opts = { context_uri: p.uri, ...(total ? { offset: { position: Math.floor(Math.random() * total) } } : {}) };
+              if (await playOn(opts, true)) closeSheet();
+            } }),
         ),
       );
       body.append(hero);
@@ -2270,33 +2287,44 @@ async function setShuffleQuiet(on) {
 }
 
 function likedView() {
+  // Любимые треки играем как коллекцию целиком (как в Spotify), а не списком из первых 50:
+  // так нажатый трек играет именно он, а «Вперемешку» берёт все любимые треки.
+  let total = 0;
   const uris = [];
+  const collection = async () => (api.isDemo ? 'spotify:collection' : `spotify:user:${(await getMe()).id}:collection`);
+  const start = async (offset, shuffle) => {
+    let ok = await playOn({ context_uri: await collection(), offset }, shuffle);
+    // Запасной путь, если Spotify не принял коллекцию: список загруженных треков
+    if (!ok && uris.length) {
+      const from = offset.uri ? Math.max(0, uris.indexOf(offset.uri)) : 0;
+      ok = await playOn({ uris: uris.slice(from, from + 100) }, shuffle);
+    }
+    if (ok) closeSheet();
+  };
   return {
     title: 'Любимые треки',
     render(body) {
       body.append(el('div', { class: 'hero-actions', style: 'margin:0 auto 10px;padding:0 8px' },
         el('button', { class: 'btn-primary', type: 'button', html: icon('play') + 'Слушать',
-          onclick: async () => { if (uris.length && await playOn({ uris: uris.slice(0, 100) })) closeSheet(); } }),
+          onclick: () => start({ position: 0 }, false) }),
         el('button', { class: 'btn-ghost', type: 'button', html: icon('shuffle') + 'Вперемешку',
-          onclick: async () => {
-            if (!uris.length) return;
-            const mixed = [...uris].sort(() => Math.random() - 0.5).slice(0, 100);
-            if (await playOn({ uris: mixed })) closeSheet();
-          } }),
+          onclick: () => start({ position: Math.floor(Math.random() * Math.max(total, 1)) }, true) }),
       ));
-      pagedList(body, (o) => api.likedTracks(o), (it, i) => {
+      pagedList(body, async (o) => {
+        const r = await api.likedTracks(o);
+        if (r?.total) total = r.total;
+        return r;
+      }, (it) => {
         const t = it?.track;
         if (!t) return null;
-        uris[i] = t.uri;
-        return trackRow(t, async () => {
-          if (await playOn({ uris: uris.slice(i, i + 100) })) closeSheet();
-        });
+        uris.push(t.uri);
+        // Перемешивание не трогаем: как в Spotify, сначала играет нажатый трек
+        return trackRow(t, () => start({ uri: t.uri }, null));
       }, 'Лайкни что-нибудь — и оно появится здесь');
     },
   };
 }
 
-/* ---------- Поиск ---------- */
 function searchView() {
   return {
     title: 'Поиск',
@@ -3100,9 +3128,9 @@ function toggleFullscreen() {
 function playButtons(uri) {
   return el('div', { class: 'hero-actions' },
     el('button', { class: 'btn-primary', type: 'button', html: icon('play') + 'Слушать',
-      onclick: async () => { await setShuffleQuiet(false); if (await playOn({ context_uri: uri })) closeSheet(); } }),
+      onclick: async () => { if (await playOn({ context_uri: uri }, false)) closeSheet(); } }),
     el('button', { class: 'btn-ghost', type: 'button', html: icon('shuffle') + 'Вперемешку',
-      onclick: async () => { await setShuffleQuiet(true); if (await playOn({ context_uri: uri })) closeSheet(); } }));
+      onclick: async () => { if (await playOn({ context_uri: uri }, true)) closeSheet(); } }));
 }
 
 function heroTitle(title, sub, onSubClick) {
