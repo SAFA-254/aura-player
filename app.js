@@ -296,9 +296,38 @@ class ApiError extends Error {
 }
 
 class SpotifyApi {
-  constructor() { this.backoffUntil = 0; this.isDemo = false; }
+  constructor() { this.backoffUntil = 0; this.isDemo = false; this.active = 0; this.waiting = []; this.lastAt = 0; }
 
-  async req(method, path, { query, body, retry = true } = {}) {
+  // Spotify строго ограничивает частоту запросов (особенно в режиме разработки):
+  // не больше 4 одновременно и не чаще раза в 60 мс, а на «подождите» (429) — ждём и повторяем
+  async _slot() {
+    if (this.active >= 4) await new Promise((r) => this.waiting.push(r));
+    this.active++;
+    const wait = Math.max(this.backoffUntil - Date.now(), this.lastAt + 60 - Date.now(), 0);
+    this.lastAt = Date.now() + wait;
+    if (wait) await sleep(wait);
+  }
+
+  _free() {
+    this.active--;
+    this.waiting.shift()?.();
+  }
+
+  async req(method, path, opts = {}) {
+    for (let attempt = 0; ; attempt++) {
+      await this._slot();
+      try {
+        return await this._req(method, path, opts);
+      } catch (e) {
+        // Подождать столько, сколько попросил Spotify (до 20 с), и попробовать ещё раз
+        if (e.status !== 429 || attempt >= 2 || this.backoffUntil - Date.now() > 20000) throw e;
+      } finally {
+        this._free();
+      }
+    }
+  }
+
+  async _req(method, path, { query, body, retry = true } = {}) {
     const token = await Auth.accessToken();
     if (!token) throw new ApiError(401, 'Нужно войти');
     const url = new URL(API + path);
@@ -309,14 +338,14 @@ class SpotifyApi {
 
     if (res.status === 401 && retry) {
       await Auth.refresh();
-      return this.req(method, path, { query, body, retry: false });
+      return this._req(method, path, { query, body, retry: false });
     }
     if (res.status === 204 || res.status === 202) return null;
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch {}
     if (!res.ok) {
-      if (res.status === 429) this.backoffUntil = Date.now() + (Number(res.headers.get('Retry-After')) || 5) * 1000;
+      if (res.status === 429) this.backoffUntil = Date.now() + Math.min(Number(res.headers.get('Retry-After')) || 5, 120) * 1000;
       throw new ApiError(res.status, data?.error?.message || 'Ошибка ' + res.status, data?.error?.reason);
     }
     return data;
@@ -2030,6 +2059,7 @@ function pagedList(parent, fetchPage, renderItem, emptyText) {
       done = true;
       list.append(note(e.status === 403 || e.status === 404
         ? 'Spotify не даёт показать этот список.'
+        : e.status === 429 ? 'Spotify просит подождать — слишком много запросов. Попробуй через минуту.'
         : e.status ? `Spotify не отдал список (ошибка ${e.status}).` : 'Не удалось загрузить. Проверь интернет.'));
     } finally {
       loading = false;
@@ -2150,7 +2180,7 @@ async function buildSmartMix(base, size) {
   const fromBase = [...count.values()].sort((x, y) => y.n - x.n).slice(0, 8).map((x) => x.a);
   let top = [];
   try { top = (await api.topItems('artists', 'short_term'))?.items || []; } catch {}
-  const artists = [...new Map([...fromBase, ...top.slice(0, 6)].map((a) => [a.id, a])).values()].slice(0, 12);
+  const artists = [...new Map([...fromBase, ...top.slice(0, 4)].map((a) => [a.id, a])).values()].slice(0, 8);
   const known = new Set([...count.values()].map((x) => (x.a.name || '').toLowerCase()));
 
   // Жанры: из твоего топа артистов (с 2026 года Spotify может их не отдавать — тогда пропускаем)
@@ -2159,8 +2189,8 @@ async function buildSmartMix(base, size) {
   const topGenres = [...genres.entries()].sort((x, y) => y[1] - x[1]).slice(0, 4).map(([g]) => g);
 
   const [fromArtists, fromSimilar, fromGenres] = await Promise.all([
-    inBatches(artists, 4, artistNewTracks),
-    inBatches(shuffled(artists).slice(0, 6), 3, (a) => similarTracks(a, known)),
+    inBatches(artists, 2, artistNewTracks),
+    inBatches(shuffled(artists).slice(0, 4), 2, (a) => similarTracks(a, known)),
     inBatches(topGenres, 2, (g) => genreTracks(g, known)),
   ]);
   // Чередуем источники, чтобы новое было разным: от своих артистов, похожие, по жанру
@@ -2562,6 +2592,7 @@ function tracklistView(src) {
             updateMeta();
             if (!page?.next || !(page.items || []).length) break;
             if (!body.isConnected) return;
+            await sleep(250); // длинный список грузим не торопясь, чтобы не упереться в лимит Spotify
           }
         } catch (e) {
           list.append(note(e.status === 403 || e.status === 404
