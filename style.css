@@ -574,3 +574,60 @@ a.btn-primary { text-decoration: none; }
 .card-title { margin-top: 8px; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-sub { margin-top: 2px; font-size: 12.5px; color: var(--text-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .card.round .card-title, .card.round .card-sub { text-align: center; }
+
+/* ---------- Главный экран, мини-плеер и нижнее меню (как в Spotify) ---------- */
+.hub {
+  position: fixed; inset: 0; z-index: 1; display: flex; flex-direction: column;
+  padding-top: var(--safe-top);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg1) 70%, #0d0b10) 0%, #0d0b10 360px), #0d0b10;
+  transition: --bg1 1.2s ease;
+}
+.hub-head { display: flex; align-items: center; gap: 6px; padding: 10px 10px 6px 18px; max-width: 720px; width: 100%; margin: 0 auto; }
+.hub-head h1 { flex: 1; margin: 0; font-size: 25px; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hub-head #hubBack:not([hidden]) + h1 { font-size: 20px; }
+.hub-body {
+  flex: 1; overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px 8px calc(var(--safe-bottom) + 150px); max-width: 720px; width: 100%; margin: 0 auto;
+}
+.hub-body > .tabs:first-child { padding-top: 4px; }
+
+.dock {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 4;
+  padding: 0 8px var(--safe-bottom);
+  background: linear-gradient(180deg, transparent 0, rgba(13, 11, 16, 0.92) 34px, #0d0b10 70px);
+}
+.mini {
+  position: relative; display: flex; align-items: center; gap: 10px; height: 60px; max-width: 704px; margin: 0 auto;
+  padding: 0 4px 0 8px; border-radius: 10px; overflow: hidden; cursor: pointer;
+  background: color-mix(in srgb, var(--bg1) 80%, #000); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  transition: background 1.2s ease;
+}
+.mini img { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; flex: none; background: rgba(255, 255, 255, 0.08); }
+.mini img:not([src]) { visibility: hidden; }
+.mini-text { flex: 1; min-width: 0; }
+.mini-title { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-sub { font-size: 12.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.mini-sub b { color: var(--accent); font-weight: 700; }
+.mini .icon-btn { flex: none; }
+.mini-progress { position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); overflow: hidden; }
+.mini-progress i { display: block; height: 100%; width: 0; background: var(--text); }
+.tabbar { display: flex; justify-content: space-around; max-width: 704px; margin: 6px auto 0; }
+.tabbar button {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 12px 8px; min-width: 84px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-2);
+}
+.tabbar button svg { width: 25px; height: 25px; }
+.tabbar button.active { color: var(--text); }
+body.hub-mode .toast { bottom: calc(var(--safe-bottom) + 150px); }
+
+/* Плеер выезжает снизу поверх главного экрана */
+.player.overlay {
+  position: fixed; inset: 0; z-index: 6; max-width: none; isolation: isolate;
+  padding-left: max(22px, calc((100vw - 520px) / 2)); padding-right: max(22px, calc((100vw - 520px) / 2));
+  background: var(--bg2);
+  transform: translateY(100%); visibility: hidden;
+  transition: transform 0.38s cubic-bezier(.2, .9, .25, 1), visibility 0s linear 0.38s;
+}
+.player.overlay.open { transform: none; visibility: visible; transition: transform 0.38s cubic-bezier(.2, .9, .25, 1), visibility 0s; }
+.player.overlay > #bg { position: absolute; z-index: -1; }
+.player.overlay:not(.open) .bg-layer { animation-play-state: paused; }

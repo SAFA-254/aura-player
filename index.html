@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
-  <link rel="stylesheet" href="style.css?v=24">
+  <link rel="stylesheet" href="style.css?v=25">
 </head>
 <body>
   <!-- Фон: размытая обложка + градиент из её цветов -->
@@ -53,10 +53,38 @@
     </div>
   </section>
 
-  <!-- Плеер -->
+  <!-- Главный экран (как в Spotify): главная, поиск, медиатека; плеер свёрнут в мини-полоску -->
+  <main id="hub" class="hub" hidden>
+    <header class="hub-head">
+      <button class="icon-btn small" id="hubBack" type="button" aria-label="Назад" data-icon="back" hidden></button>
+      <h1 id="hubTitle"></h1>
+      <button class="icon-btn small" id="hubMenu" type="button" aria-label="Настройки" data-icon="more"></button>
+    </header>
+    <div id="hubBody" class="hub-body"></div>
+  </main>
+
+  <div id="dock" class="dock" hidden>
+    <div id="mini" class="mini" role="button" tabindex="0" aria-label="Открыть плеер">
+      <img id="miniCover" alt="">
+      <div class="mini-text">
+        <div id="miniTitle" class="mini-title">Ничего не играет</div>
+        <div id="miniSub" class="mini-sub"></div>
+      </div>
+      <button class="icon-btn small" id="miniDevice" type="button" aria-label="Где играть" data-icon="speaker"></button>
+      <button class="icon-btn" id="miniPlay" type="button" aria-label="Играть" data-icon="play"></button>
+      <div class="mini-progress"><i id="miniBar"></i></div>
+    </div>
+    <nav class="tabbar">
+      <button type="button" data-tab="home" class="active"><span data-icon="home"></span>Главная</button>
+      <button type="button" data-tab="search"><span data-icon="search"></span>Поиск</button>
+      <button type="button" data-tab="library"><span data-icon="library"></span>Медиатека</button>
+    </nav>
+  </div>
+
+  <!-- Плеер: на телефоне выезжает поверх главного экрана -->
   <main id="player" class="screen player" hidden>
     <header class="top">
-      <button class="icon-btn" id="btnLibrary" type="button" aria-label="Главная" data-icon="home"></button>
+      <button class="icon-btn" id="btnLibrary" type="button" aria-label="Свернуть плеер" data-icon="chevronDown"></button>
       <div class="top-title">
         <span class="clock" id="clock"></span>
         <span class="eyebrow" id="contextType">Сейчас играет</span>
@@ -141,6 +169,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=25"></script>
 </body>
 </html>

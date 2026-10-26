@@ -139,6 +139,7 @@ const ICONS = {
   search: ['s', '<circle cx="11" cy="11" r="7"/><path d="m20.5 20.5-4.5-4.5"/>'],
   library: ['s', '<path d="M4.5 4v16M9.5 4v16"/><path d="m14 4.6 5.5 15"/>'],
   home: ['s', '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h5v-6h4v6h5V9"/>'],
+  chevronDown: ['s', '<path d="m6 9 6 6 6-6"/>'],
   more: ['f', '<circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/>'],
   close: ['s', '<path d="M18 6 6 18M6 6l12 12"/>'],
   back: ['s', '<path d="m15 18-6-6 6-6"/>'],
@@ -854,6 +855,7 @@ function render(s, fresh) {
   updateDeviceChip();
   updateContext(s);
   pushWidget();
+  updateMini();
   updateProgress(true);
 }
 
@@ -1260,6 +1262,7 @@ function updateProgress(force) {
       ui.lastV = v;
       seek.value = v;
       seek.style.setProperty('--p', v / 10 + '%');
+      if (hubMode()) $('#miniBar').style.width = v / 10 + '%';
     }
     const sec = Math.floor(pos / 1000);
     if (force || sec !== ui.lastSec) {
@@ -1829,7 +1832,12 @@ function openSheet(view) {
     history.pushState({ sheet: true }, '');
   }
 }
-function pushView(view) { sheet.stack.push(view); renderView(); }
+function pushView(view) {
+  // На главном экране страницы открываются прямо на нём, в шторке — в шторке
+  if (!sheet.open && hubMode()) { hubPush(view); return; }
+  sheet.stack.push(view);
+  renderView();
+}
 function popView() { if (sheet.stack.length > 1) { sheet.stack.pop(); renderView(); } }
 function renderView() {
   const v = sheet.stack[sheet.stack.length - 1];
@@ -1850,16 +1858,25 @@ function closeSheet(fromPop) {
   sheet.hideTimer = setTimeout(() => {
     if (!sheet.open) { s.hidden = true; b.hidden = true; $('#sheetBody').replaceChildren(); }
   }, 400);
-  if (!fromPop && history.state?.sheet) history.back();
+  if (!fromPop && history.state?.sheet) quietBack();
 }
 // Кнопка/жест «назад» на Android закрывает шторку, а не приложение
 window.addEventListener('popstate', () => {
-  if (!sheet.open) return;
-  if (sheet.stack.length > 1) {
-    popView();
-    history.pushState({ sheet: true }, '');
-  } else {
-    closeSheet(true);
+  if (nav.ignorePop) { nav.ignorePop = false; return; }
+  if (sheet.open) {
+    if (sheet.stack.length > 1) {
+      popView();
+      history.pushState({ sheet: true }, '');
+    } else {
+      closeSheet(true);
+    }
+    return;
+  }
+  if (playerOpen()) { collapsePlayer(true); return; }
+  if (hubMode() && nav.stack.length > 1) {
+    nav.stack.pop();
+    hubRender();
+    if (nav.stack.length > 1) history.pushState({ hub: true }, '');
   }
 });
 
@@ -1944,6 +1961,123 @@ function pagedList(parent, fetchPage, renderItem, emptyText) {
 }
 
 /* ---------- Медиатека ---------- */
+/* ---------- Главный экран и мини-плеер (как в Spotify) ----------
+   Главная, поиск и медиатека открываются на самом экране; плеер свёрнут в полоску внизу
+   и выезжает по нажатию. Настройки, устройства и очередь — по-прежнему шторками. */
+const nav = { stack: [], tab: 'home', ignorePop: false };
+const TAB_VIEWS = { home: () => homeView(), search: () => searchView(), library: () => libraryView() };
+
+function hubMode() { return !$('#hub').hidden; }
+function playerOpen() { return $('#player').classList.contains('open'); }
+
+// Программный history.back(): само состояние уже поменяли, popstate игнорируем
+function quietBack() { nav.ignorePop = true; history.back(); }
+
+function hubRender() {
+  const v = nav.stack[nav.stack.length - 1];
+  if (!v) return;
+  $('#hubTitle').textContent = v.title;
+  $('#hubBack').hidden = nav.stack.length < 2;
+  const body = $('#hubBody');
+  body.replaceChildren();
+  body.scrollTop = 0;
+  v.render(body);
+}
+
+function hubPush(view) {
+  nav.stack.push(view);
+  if (nav.stack.length === 2) history.pushState({ hub: true }, '');
+  hubRender();
+}
+
+function hubBack() {
+  if (nav.stack.length < 2) return;
+  nav.stack.pop();
+  hubRender();
+  if (nav.stack.length === 1 && history.state?.hub) quietBack();
+}
+
+function setTab(tab) {
+  nav.tab = tab;
+  document.querySelectorAll('.tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  if (nav.stack.length > 1 && history.state?.hub) quietBack();
+  nav.stack = [TAB_VIEWS[tab]()];
+  hubRender();
+  if (playerOpen()) collapsePlayer();
+}
+
+function refreshView() { if (sheet.open || !hubMode()) renderView(); else hubRender(); }
+
+function expandPlayer() {
+  if (!hubMode() || playerOpen()) return;
+  $('#player').classList.add('open');
+  history.pushState({ player: true }, '');
+  updateMarquee();
+  if (lyricsVisible()) requestAnimationFrame(() => syncLyrics(true));
+}
+
+function collapsePlayer(fromPop) {
+  if (!hubMode() || !playerOpen()) return;
+  $('#player').classList.remove('open');
+  if (!fromPop && history.state?.player) quietBack();
+}
+
+function enterHub() {
+  if (hubMode()) return;
+  document.body.classList.add('hub-mode');
+  $('#hub').hidden = false;
+  $('#dock').hidden = false;
+  const p = $('#player');
+  p.prepend($('#bg')); // фон из обложки теперь у выезжающего плеера
+  p.classList.add('overlay');
+  // На большом экране (планшет, компьютер) сразу показываем плеер
+  if (WIDE_MQ.matches) p.classList.add('open');
+  nav.stack = [TAB_VIEWS[nav.tab]()];
+  hubRender();
+}
+
+function leaveHub() {
+  document.body.classList.remove('hub-mode');
+  $('#hub').hidden = true;
+  $('#dock').hidden = true;
+  const p = $('#player');
+  p.classList.remove('overlay', 'open');
+  document.body.prepend($('#bg'));
+  nav.stack = [];
+}
+
+function updateMini() {
+  if (!hubMode()) return;
+  const s = ui.pb, item = s?.item;
+  $('#miniTitle').textContent = item?.name || (s ? 'Загрузка…' : 'Ничего не играет');
+  const d = s?.device;
+  const where = d ? (d.id === local.deviceId ? 'Aura' : cleanDeviceName(d.name)) : '';
+  const sub = $('#miniSub');
+  sub.replaceChildren();
+  if (item) sub.append(itemArtists(item));
+  if (where && where !== 'Aura') sub.append(item ? ' · ' : '', el('b', {}, where));
+  else if (!item) sub.append(s ? where : 'Нажми ▶, чтобы включить');
+  const img = item ? pickImage(itemImages(item), 64) : '';
+  const cover = $('#miniCover');
+  if (img) { if (cover.getAttribute('src') !== img) cover.src = img; } else cover.removeAttribute('src');
+  setIcon($('#miniPlay'), s?.is_playing ? 'pause' : 'play');
+  $('#miniPlay').setAttribute('aria-label', s?.is_playing ? 'Пауза' : 'Играть');
+}
+
+function bindHub() {
+  $('#hubBack').addEventListener('click', hubBack);
+  $('#hubMenu').addEventListener('click', () => openSheet(settingsView()));
+  document.querySelectorAll('.tabbar button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  $('#mini').addEventListener('click', expandPlayer);
+  $('#mini').addEventListener('keydown', (e) => { if (e.key === 'Enter') expandPlayer(); });
+  $('#miniPlay').addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
+  $('#miniDevice').addEventListener('click', (e) => { e.stopPropagation(); openDevices(); });
+  // Свайп вверх по мини-плееру — развернуть
+  let y0 = null;
+  $('#mini').addEventListener('pointerdown', (e) => { y0 = e.clientY; });
+  $('#mini').addEventListener('pointerup', (e) => { if (y0 != null && y0 - e.clientY > 40) expandPlayer(); y0 = null; });
+}
+
 /* ---------- Главная: как в Spotify, из твоей истории ----------
    Свои «радио» и автоматические миксы Spotify сторонним приложениям не отдаёт,
    поэтому всё собираем из недавно прослушанного, топа артистов и твоих плейлистов. */
@@ -2070,7 +2204,7 @@ function homeView() {
             onClick: () => pushView(playlistView(p)),
           }))),
           el('button', { class: 'btn-ghost', type: 'button', style: 'margin:8px', html: icon('refresh') + 'Обновить',
-            onclick: () => { home.data = null; renderView(); } }));
+            onclick: () => { home.data = null; refreshView(); } }));
       }).catch((e) => { box.replaceChildren(note('Не удалось загрузить главную')); handleError(e, false); });
     },
   };
@@ -2451,7 +2585,9 @@ function bindPlayerSwipes() {
     const dx = e.clientX - s.x, dy = e.clientY - s.y, quick = Date.now() - s.t < 700;
     s = null;
     if (!quick || Math.abs(dy) < 70 || Math.abs(dy) < Math.abs(dx) * 1.4) return;
-    openSheet(dy < 0 ? queueView() : libraryView());
+    if (dy < 0) openSheet(queueView());
+    else if (hubMode()) collapsePlayer();
+    else openSheet(libraryView());
   });
   p.addEventListener('pointercancel', () => { s = null; });
 }
@@ -3178,6 +3314,8 @@ function startApp(a) {
   lyr.cache.clear();
   $('#login').hidden = true;
   $('#player').hidden = false;
+  enterHub();
+  updateMini();
   cancelAnimationFrame(ui.raf);
   progressLoop();
   poll();
@@ -3201,6 +3339,7 @@ function showLogin(message) {
   clearTimeout(ui.timer);
   cancelAnimationFrame(ui.raf);
   closeSheet();
+  leaveHub();
   $('#player').hidden = true;
   $('#login').hidden = false;
   $('#clientIdBox').hidden = !!CONFIG.clientId;
@@ -3261,7 +3400,8 @@ function bindUI() {
     command(() => api.seek(ms), (s) => { s.progress_ms = ms; });
   });
 
-  $('#btnLibrary').addEventListener('click', () => openSheet(homeView()));
+  $('#btnLibrary').addEventListener('click', () => (hubMode() ? collapsePlayer() : openSheet(homeView())));
+  bindHub();
   $('#btnOpenLibrary').addEventListener('click', () => openSheet(libraryView()));
   $('#btnRetry').addEventListener('click', retryWake);
   $('#btnWake').addEventListener('click', () => { setOverlay(null); wakeAndPlay(); });
