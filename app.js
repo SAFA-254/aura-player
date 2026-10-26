@@ -884,6 +884,20 @@ function setOverlay(kind, s) {
    приложение Spotify для этого не нужно. Официально Spotify поддерживает SDK только
    на компьютерах, поэтому на телефоне это эксперимент. */
 const local = { player: null, deviceId: null, status: 'off', error: '', playing: false, waiters: [], render: null };
+// В Android-приложении плеер живёт в фоновой службе (играет, даже если окно закрыть),
+// окно только управляет им. В браузере — прямо на странице.
+const ENGINE = !!NATIVE?.engineStart;
+
+// События плеера из фоновой службы
+window.auraEngine = (e) => {
+  local.deviceId = e.deviceId || null;
+  if (e.type === 'playback_error') { toast('Плеер Aura: ошибка воспроизведения'); return; }
+  const was = local.playing;
+  local.playing = !!e.playing;
+  if (e.status !== local.status || e.error !== local.error) setLocalStatus(e.status, e.error);
+  else if (was !== local.playing) local.render?.();
+  if (api && (e.type === 'state' || e.type === 'ready')) schedulePoll(400);
+};
 
 // Короткий журнал плеера: когда свернули/развернули, когда встало воспроизведение
 function localLog(text) {
@@ -897,7 +911,7 @@ window.addEventListener('offline', () => { if (settings.playInAura) localLog('п
 window.addEventListener('online', () => { if (settings.playInAura) localLog('интернет вернулся'); });
 // Пока играет музыка — отметка раз в 15 секунд: если отметки прервутся, значит страницу остановили
 setInterval(() => {
-  if (!local.player || !local.playing) return;
+  if (ENGINE || !local.player || !local.playing) return;
   local.player.getCurrentState().then((st) => {
     localLog(`жива · ${st ? (st.paused ? 'пауза' : 'играет') + ' ' + fmtTime(st.position) : 'плеер пуст'}`);
   }).catch(() => localLog('жива · плеер не ответил'));
@@ -926,7 +940,15 @@ function setLocalStatus(status, error = '') {
 }
 
 function loadLocalPlayer() {
-  if (!api || api.isDemo || local.player || local.status === 'loading') return;
+  if (!api || api.isDemo) return;
+  if (ENGINE) {
+    if (!hasStreamingScope()) { setLocalStatus('error', 'нужно войти заново, чтобы разрешить воспроизведение'); return; }
+    window.auraEngine({ type: 'status', ...JSON.parse(NATIVE.engineStatus()) });
+    if (local.status === 'off' || local.status === 'error') { local.status = 'loading'; local.render?.(); }
+    NATIVE.engineStart();
+    return;
+  }
+  if (local.player || local.status === 'loading') return;
   localLog('страница загружена, запускаю плеер');
   if (!hasStreamingScope()) { setLocalStatus('error', 'нужно войти заново, чтобы разрешить воспроизведение'); return; }
   setLocalStatus('loading');
@@ -978,6 +1000,13 @@ function initLocalPlayer() {
 }
 
 function stopLocalPlayer() {
+  if (ENGINE) {
+    NATIVE.engineStop();
+    local.deviceId = null;
+    local.playing = false;
+    setLocalStatus('off');
+    return;
+  }
   local.player?.disconnect();
   local.player = null;
   local.deviceId = null;
@@ -1024,8 +1053,10 @@ function localCard() {
   const card = el('div', { class: 'settings-card' });
   local.render = () => {
     const parts = [
-      el('h3', {}, 'Играть музыку в Aura · эксперимент'),
-      el('p', {}, 'Aura сама играет звук как отдельное устройство Spotify — приложение Spotify не нужно. Официально Spotify поддерживает это только на компьютерах, на телефоне может не заработать.'),
+      el('h3', {}, 'Играть музыку в Aura'),
+      el('p', {}, ENGINE
+        ? 'Aura сама играет звук как отдельное устройство Spotify — приложение Spotify не нужно. Плеер работает в фоне: музыка играет, даже если Aura закрыть или смахнуть.'
+        : 'Aura сама играет звук как отдельное устройство Spotify — приложение Spotify не нужно.'),
       switchRow('Играть в Aura', settings.playInAura, (on) => {
         settings.playInAura = on;
         saveSettings();

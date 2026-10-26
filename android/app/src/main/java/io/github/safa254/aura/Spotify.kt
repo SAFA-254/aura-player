@@ -27,6 +27,9 @@ class Spotify(private val ctx: Context) {
         try { JSONObject(it) } catch (_: Exception) { null }
     }
 
+    /** Свежий токен для плеера (обновит при необходимости) или null. Блокирующий вызов. */
+    fun accessTokenOrNull(): String? = try { accessToken() } catch (_: Exception) { null }
+
     private fun accessToken(): String {
         val t = token() ?: throw ApiException(401, "Нужно войти в Aura")
         if (System.currentTimeMillis() < t.optLong("expires_at") - 60_000) return t.getString("access_token")

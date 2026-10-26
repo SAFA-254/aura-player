@@ -75,6 +75,8 @@ class MainActivity : Activity() {
         }
 
         web.loadUrl(pageFor(intent))
+        // События фонового плеера — в окно, пока оно открыто
+        Engine.listener = { json -> web.evaluateJavascript("window.auraEngine && window.auraEngine($json)", null) }
         AuraWidget.schedulePeriodic(this)
         try { Alarm.schedule(this) } catch (_: Exception) {}
         showLastCrash()
@@ -191,18 +193,19 @@ class MainActivity : Activity() {
     }
 
     override fun onStop() {
-        log("ушло с экрана" + if (NowBar.localPlayback) ", музыка играет" else "")
+        log("ушло с экрана" + if (pagePlayback || Engine.playing) ", музыка играет" else "")
         super.onStop()
     }
 
     override fun onPause() {
         // Музыка играет в самой Aura — страницу не усыпляем, иначе звук остановится
-        if (!NowBar.localPlayback) web.onPause()
+        if (!pagePlayback) web.onPause()
         AuraWidget.refreshAsync(this)
         super.onPause()
     }
 
     override fun onDestroy() {
+        Engine.listener = null
         log("приложение закрыто" + if (isFinishing) "" else " системой")
         headphones.stop()
         web.destroy()
@@ -283,6 +286,19 @@ class MainActivity : Activity() {
             NowBar.running?.let { runOnUiThread { it.poke() } }
         }
 
+        // Плеер в фоновой службе: играет, даже когда окно Aura закрыто
+        @JavascriptInterface
+        fun engineStart() = runOnUiThread { NowBar.setEngine(this@MainActivity, true) }
+
+        @JavascriptInterface
+        fun engineStop() = runOnUiThread { NowBar.setEngine(this@MainActivity, false) }
+
+        @JavascriptInterface
+        fun engineStatus(): String = Engine.json()
+
+        @JavascriptInterface
+        fun engineCommand(cmd: String) = Engine.command(cmd)
+
         /** Журнал приложения (для «Журнала плеера»). */
         @JavascriptInterface
         fun getLog(): String = prefs.getString("log", "") ?: ""
@@ -293,7 +309,8 @@ class MainActivity : Activity() {
         /** Музыка заиграла / остановилась во встроенном плеере Aura. */
         @JavascriptInterface
         fun localPlayback(on: Boolean) = runOnUiThread {
-            NowBar.localPlayback = on
+            pagePlayback = on
+            NowBar.localPlayback = on || Engine.playing
             // Звук играет в отдельном процессе WebView. Свёрнутой Aura Android понижает ему
             // приоритет и замораживает — вместе с музыкой. Пока играем, держим его важным.
             web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, !on)
@@ -494,11 +511,7 @@ class MainActivity : Activity() {
     }
 
     // Короткий журнал событий приложения: показывается в «Журнале плеера» на странице
-    private fun log(text: String) {
-        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
-        val lines = (prefs.getString("log", "") ?: "").lines().filter { it.isNotBlank() }.takeLast(39)
-        prefs.edit().putString("log", (lines + "$time  [Android] $text").joinToString("\n")).commit()
-    }
+    private fun log(text: String) = AuraLog.add(this, text)
 
     private val prefs by lazy { getSharedPreferences("aura", MODE_PRIVATE) }
 
@@ -517,7 +530,7 @@ class MainActivity : Activity() {
      */
     private class PlayerWebView(ctx: android.content.Context) : WebView(ctx) {
         override fun onWindowVisibilityChanged(visibility: Int) {
-            if (NowBar.localPlayback && visibility != android.view.View.VISIBLE) {
+            if (pagePlayback && visibility != android.view.View.VISIBLE) {
                 super.onWindowVisibilityChanged(android.view.View.VISIBLE)
             } else {
                 super.onWindowVisibilityChanged(visibility)
@@ -526,6 +539,10 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        /** Музыка играет в плеере прямо на странице окна (не в фоновой службе). */
+        @Volatile
+        var pagePlayback = false
+
         const val HOST = "safa-254.github.io"
         const val PATH = "/aura-player"
         const val HOME = "https://$HOST$PATH/"

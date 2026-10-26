@@ -63,15 +63,17 @@ class NowBar : Service() {
         running = this
         session = MediaSession(this, "Aura").apply {
             setCallback(object : MediaSession.Callback() {
-                override fun onPlay() = act(true) { it.play() }
-                override fun onPause() = act(false) { it.req("PUT", "/me/player/pause") }
-                override fun onStop() = act(false) { it.req("PUT", "/me/player/pause") }
-                override fun onSkipToNext() = act(null) { it.next() }
-                override fun onSkipToPrevious() = act(null) { it.prev() }
-                override fun onSeekTo(pos: Long) = act(null) { it.req("PUT", "/me/player/seek?position_ms=$pos") }
+                // Музыка играет в плеере Aura — командуем ему напрямую, без интернета
+                override fun onPlay() = act(true, "play") { it.play() }
+                override fun onPause() = act(false, "pause") { it.req("PUT", "/me/player/pause") }
+                override fun onStop() = act(false, "pause") { it.req("PUT", "/me/player/pause") }
+                override fun onSkipToNext() = act(null, "next") { it.next() }
+                override fun onSkipToPrevious() = act(null, "prev") { it.prev() }
+                override fun onSeekTo(pos: Long) = act(null, "seek:$pos") { it.req("PUT", "/me/player/seek?position_ms=$pos") }
             })
             setSessionActivity(openAura())
         }
+        if (engineEnabled(this)) Engine.start(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -100,6 +102,7 @@ class NowBar : Service() {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
+        Engine.stop()
         holdWake(false)
         session.isActive = false
         session.release()
@@ -114,8 +117,14 @@ class NowBar : Service() {
     }
 
     // Нажали кнопку на карточке: сразу меняем значок, потом говорим Spotify и перепроверяем
-    private fun act(playing: Boolean?, call: (Spotify) -> Unit) {
+    private fun act(playing: Boolean?, engineCmd: String, call: (Spotify) -> Unit) {
         if (playing != null) state?.put("is_playing", playing)?.also { apply() }
+        val device = state?.optJSONObject("device")?.optString("id")
+        if (Engine.deviceId != null && (device == Engine.deviceId || Engine.playing)) {
+            Engine.command(engineCmd)
+            main.postDelayed({ poke() }, 700)
+            return
+        }
         io.execute {
             try { call(Spotify(this)) } catch (_: Exception) {}
             main.postDelayed({ poke() }, 700)
@@ -137,7 +146,7 @@ class NowBar : Service() {
                 val playing = st?.optBoolean("is_playing") == true
                 if (playing) idleSince = 0 else if (idleSince == 0L) idleSince = SystemClock.elapsedRealtime()
                 holdWake(localPlayback)
-                if ((!enabled(this) && !localPlayback) || (idleSince > 0 && SystemClock.elapsedRealtime() - idleSince > IDLE_MS)) {
+                if ((!enabled(this) && !localPlayback && !engineEnabled(this)) || (idleSince > 0 && SystemClock.elapsedRealtime() - idleSince > IDLE_MS)) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                     return@post
@@ -257,6 +266,19 @@ class NowBar : Service() {
 
         fun enabled(ctx: Context): Boolean = prefs(ctx).getBoolean("nowbar", false)
 
+        /** Включён ли плеер в фоне (Engine) — тогда служба нужна всегда, пока что-то играет. */
+        fun engineEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean("engine", false)
+
+        fun setEngine(ctx: Context, on: Boolean) {
+            prefs(ctx).edit().putBoolean("engine", on).apply()
+            if (on) {
+                running?.let { Engine.start(it) } ?: start(ctx)
+            } else {
+                Engine.stop()
+                running?.poke()
+            }
+        }
+
         fun setEnabled(ctx: Context, on: Boolean) {
             prefs(ctx).edit().putBoolean("nowbar", on).apply()
             if (on) start(ctx) else running?.poke()
@@ -264,7 +286,8 @@ class NowBar : Service() {
 
         /** Запустить (можно только пока Aura на экране) или подтолкнуть уже работающую. */
         fun start(ctx: Context) {
-            if ((!enabled(ctx) && !localPlayback) || !Spotify(ctx).loggedIn()) return
+            if ((!enabled(ctx) && !localPlayback && !engineEnabled(ctx)) || !Spotify(ctx).loggedIn()) return
+            if (engineEnabled(ctx)) running?.let { Engine.start(it) }
             running?.let { it.poke(); return }
             try { ctx.startForegroundService(Intent(ctx, NowBar::class.java)) } catch (_: Exception) {}
         }
