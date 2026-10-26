@@ -542,3 +542,35 @@ a.btn-primary { text-decoration: none; }
 .player-log { margin-top: 12px; color: var(--text-2); font-size: 13px; }
 .player-log summary { cursor: pointer; font-weight: 700; }
 .player-log pre { white-space: pre-wrap; font-size: 12px; line-height: 1.5; margin: 8px 0 0; user-select: text; max-height: 240px; overflow: auto; }
+
+/* ---------- Главная ---------- */
+.chips { display: flex; gap: 8px; padding: 2px 8px 14px; overflow-x: auto; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip-btn {
+  display: inline-flex; align-items: center; gap: 7px; flex: none; padding: 9px 15px; border-radius: 999px;
+  background: var(--glass-strong); font-size: 14px; font-weight: 700;
+}
+.chip-btn svg { width: 17px; height: 17px; }
+.quick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 8px; }
+.quick {
+  display: flex; align-items: center; gap: 10px; min-width: 0; height: 56px; padding-right: 8px;
+  border-radius: 8px; overflow: hidden; background: var(--glass-strong); text-align: left;
+  font-size: 13.5px; font-weight: 800; line-height: 1.2; transition: background 0.15s ease;
+}
+.quick:active { background: var(--glass); }
+.quick span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.quick-img { width: 56px; height: 56px; flex: none; object-fit: cover; display: grid; place-items: center; background: var(--glass); }
+.quick-img svg { width: 24px; height: 24px; }
+.quick-img.round { border-radius: 50%; transform: scale(0.82); }
+.quick-img.liked { background: linear-gradient(135deg, #4a2bff, #b5e3d8); color: #fff; }
+.shelf { margin-top: 26px; }
+.shelf-title { margin: 0 10px 12px; font-size: 21px; font-weight: 800; letter-spacing: -0.01em; }
+.hrow { display: flex; gap: 14px; overflow-x: auto; padding: 0 10px 4px; scroll-snap-type: x proximity; scrollbar-width: none; }
+.hrow::-webkit-scrollbar { display: none; }
+.card { flex: none; width: 140px; text-align: left; scroll-snap-align: start; }
+.card img, .card-ph { width: 140px; height: 140px; border-radius: 10px; object-fit: cover; display: grid; place-items: center; background: var(--glass); box-shadow: 0 10px 24px -12px rgba(0, 0, 0, 0.6); }
+.card-ph svg { width: 40px; height: 40px; color: var(--text-3); }
+.card.round img, .card.round .card-ph { border-radius: 50%; }
+.card-title { margin-top: 8px; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-sub { margin-top: 2px; font-size: 12.5px; color: var(--text-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.card.round .card-title, .card.round .card-sub { text-align: center; }

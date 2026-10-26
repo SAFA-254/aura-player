@@ -138,6 +138,7 @@ const ICONS = {
   addQueue: ['s', '<path d="M4 7h10M4 12h10M4 17h6"/><path d="M18 13v8M14 17h8"/>'],
   search: ['s', '<circle cx="11" cy="11" r="7"/><path d="m20.5 20.5-4.5-4.5"/>'],
   library: ['s', '<path d="M4.5 4v16M9.5 4v16"/><path d="m14 4.6 5.5 15"/>'],
+  home: ['s', '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h5v-6h4v6h5V9"/>'],
   more: ['f', '<circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/>'],
   close: ['s', '<path d="M18 6 6 18M6 6l12 12"/>'],
   back: ['s', '<path d="m15 18-6-6 6-6"/>'],
@@ -1943,6 +1944,138 @@ function pagedList(parent, fetchPage, renderItem, emptyText) {
 }
 
 /* ---------- Медиатека ---------- */
+/* ---------- Главная: как в Spotify, из твоей истории ----------
+   Свои «радио» и автоматические миксы Spotify сторонним приложениям не отдаёт,
+   поэтому всё собираем из недавно прослушанного, топа артистов и твоих плейлистов. */
+const home = { data: null, at: 0 };
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? 'Доброй ночи' : h < 12 ? 'Доброе утро' : h < 18 ? 'Добрый день' : 'Добрый вечер';
+}
+
+// Что слушали недавно: плейлисты, альбомы, артисты — без повторов, с названием и обложкой
+async function recentContexts() {
+  const r = await api.recentlyPlayed().catch(() => null);
+  const seen = new Set(), out = [];
+  for (const it of r?.items || []) {
+    const t = it.track;
+    if (!t) continue;
+    const ctx = it.context;
+    let key, kind;
+    if (ctx?.type === 'playlist' || ctx?.type === 'artist') { key = ctx.uri; kind = ctx.type; }
+    else if (ctx?.type === 'collection') { key = 'liked'; kind = 'liked'; }
+    else if (t.album?.uri || t.album?.id) { key = t.album.uri || 'spotify:album:' + t.album.id; kind = 'album'; }
+    else continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, kind, track: t });
+    if (out.length >= 20) break;
+  }
+  // Названия и картинки плейлистов и артистов догружаем; чужие «радио» Spotify не отдаёт — их пропускаем
+  const full = await Promise.all(out.map(async (c) => {
+    try {
+      if (c.kind === 'album') {
+        const al = c.track.album;
+        return { ...c, title: al.name, sub: 'Альбом · ' + itemArtists(al.artists ? al : c.track), img: pickImage(al.images, 300), open: () => pushView(albumView(al)) };
+      }
+      if (c.kind === 'playlist') {
+        const id = c.key.split(':').pop();
+        const p = await api.playlist(id);
+        if (!p?.name) return null;
+        const pl = { ...p, id, uri: c.key };
+        return { ...c, title: p.name, sub: 'Плейлист' + (p.owner?.display_name ? ' · ' + p.owner.display_name : ''), img: pickImage(p.images, 300), open: () => pushView(playlistView(pl)) };
+      }
+      if (c.kind === 'artist') {
+        const a = await api.artist(c.key.split(':').pop());
+        if (!a?.name) return null;
+        return { ...c, title: a.name, sub: 'Артист', img: pickImage(a.images, 300), round: true, open: () => pushView(artistView(a)) };
+      }
+      return null; // «Любимые треки» и так первая плитка
+    } catch { return null; }
+  }));
+  return full.filter(Boolean);
+}
+
+async function loadHome(force) {
+  if (!force && home.data && Date.now() - home.at < 5 * 60e3) return home.data;
+  const [recent, artists, lists] = await Promise.all([
+    recentContexts(),
+    api.topItems('artists', 'short_term').then((r) => r?.items || []).catch(() => []),
+    api.playlists(0).then((r) => (r?.items || []).filter(Boolean)).catch(() => []),
+  ]);
+  home.data = { recent, artists, lists };
+  home.at = Date.now();
+  return home.data;
+}
+
+// Карточка в горизонтальной ленте
+function card({ img, title, sub, round, onClick, iconName = 'music' }) {
+  return el('button', { class: 'card' + (round ? ' round' : ''), type: 'button', onclick: onClick },
+    img ? el('img', { src: img, alt: '', loading: 'lazy' }) : el('div', { class: 'card-ph', html: icon(iconName) }),
+    el('div', { class: 'card-title' }, title),
+    sub ? el('div', { class: 'card-sub' }, sub) : null);
+}
+
+function shelf(title, cards) {
+  if (!cards.length) return null;
+  return el('section', { class: 'shelf' }, el('h2', { class: 'shelf-title' }, title), el('div', { class: 'hrow' }, ...cards));
+}
+
+async function playContext(uri, shuffle) {
+  await setShuffleQuiet(shuffle);
+  if (await playOn({ context_uri: uri })) closeSheet();
+}
+
+function homeView() {
+  return {
+    title: greeting(),
+    render(body) {
+      body.append(el('div', { class: 'chips' },
+        el('button', { class: 'chip-btn', type: 'button', onclick: () => pushView(libraryView()), html: icon('library') + 'Медиатека' }),
+        el('button', { class: 'chip-btn', type: 'button', onclick: () => pushView(searchView()), html: icon('search') + 'Поиск' }),
+        el('button', { class: 'chip-btn', type: 'button', onclick: () => pushView(statsView()), html: icon('stats') + 'Статистика' })));
+      const box = el('div', {}, loader());
+      body.append(box);
+      loadHome(false).then((d) => {
+        if (!box.isConnected) return;
+        const liked = el('button', { class: 'quick', type: 'button', onclick: () => pushView(likedView()) },
+          el('div', { class: 'quick-img liked', html: icon('heartFill') }), el('span', {}, 'Любимые треки'));
+        const tiles = [liked];
+        // Плитки: недавнее, а если его мало — твои плейлисты
+        const pool = [...d.recent, ...d.lists.map((p) => ({ key: p.uri, title: p.name, img: pickImage(p.images, 120), open: () => pushView(playlistView(p)) }))];
+        const used = new Set();
+        for (const c of pool) {
+          if (tiles.length >= 8) break;
+          if (used.has(c.key)) continue;
+          used.add(c.key);
+          tiles.push(el('button', { class: 'quick', type: 'button', onclick: c.open },
+            c.img ? el('img', { class: 'quick-img' + (c.round ? ' round' : ''), src: c.img, alt: '' }) : el('div', { class: 'quick-img', html: icon('music') }),
+            el('span', {}, c.title)));
+        }
+        const more = d.recent.filter((c) => !used.has(c.key));
+        box.replaceChildren(
+          el('div', { class: 'quick-grid' }, ...tiles),
+          shelf('Слушаем дальше?', (more.length ? more : d.recent).map((c) => card({ ...c, onClick: c.open }))),
+          shelf('Твои артисты', d.artists.slice(0, 12).map((a) => card({
+            img: pickImage(a.images, 300), title: a.name, sub: 'Артист', round: true, iconName: 'user',
+            onClick: () => pushView(artistView(a)),
+          }))),
+          shelf('Миксы артистов', d.artists.slice(0, 10).map((a) => card({
+            img: pickImage(a.images, 300), title: 'Микс: ' + a.name, sub: 'Лучшие треки вперемешку', iconName: 'user',
+            onClick: () => playContext(a.uri || 'spotify:artist:' + a.id, true),
+          }))),
+          shelf('Твои плейлисты', d.lists.slice(0, 15).map((p) => card({
+            img: pickImage(p.images, 300), title: p.name, sub: p.owner?.display_name || 'Плейлист',
+            onClick: () => pushView(playlistView(p)),
+          }))),
+          el('button', { class: 'btn-ghost', type: 'button', style: 'margin:8px', html: icon('refresh') + 'Обновить',
+            onclick: () => { home.data = null; renderView(); } }));
+      }).catch((e) => { box.replaceChildren(note('Не удалось загрузить главную')); handleError(e, false); });
+    },
+  };
+}
+
 function libraryView() {
   return {
     title: 'Медиатека',
@@ -3128,7 +3261,7 @@ function bindUI() {
     command(() => api.seek(ms), (s) => { s.progress_ms = ms; });
   });
 
-  $('#btnLibrary').addEventListener('click', () => openSheet(libraryView()));
+  $('#btnLibrary').addEventListener('click', () => openSheet(homeView()));
   $('#btnOpenLibrary').addEventListener('click', () => openSheet(libraryView()));
   $('#btnRetry').addEventListener('click', retryWake);
   $('#btnWake').addEventListener('click', () => { setOverlay(null); wakeAndPlay(); });
