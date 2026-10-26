@@ -631,3 +631,13 @@ body.hub-mode .toast { bottom: calc(var(--safe-bottom) + 150px); }
 .player.overlay.open { transform: none; visibility: visible; transition: transform 0.38s cubic-bezier(.2, .9, .25, 1), visibility 0s; }
 .player.overlay > #bg { position: absolute; z-index: -1; }
 .player.overlay:not(.open) .bg-layer { animation-play-state: paused; }
+
+/* Умное перемешивание */
+.btn-smart {
+  display: flex; align-items: center; justify-content: center; gap: 8px; width: calc(100% - 16px); max-width: 340px;
+  margin: 0 auto 14px; min-height: 44px; padding: 0 16px; border-radius: 999px; font-size: 14px; font-weight: 800;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.btn-smart svg { width: 18px; height: 18px; }
+.eyebrow.smart { color: var(--accent); }

@@ -140,6 +140,7 @@ const ICONS = {
   library: ['s', '<path d="M4.5 4v16M9.5 4v16"/><path d="m14 4.6 5.5 15"/>'],
   home: ['s', '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h5v-6h4v6h5V9"/>'],
   chevronDown: ['s', '<path d="m6 9 6 6 6-6"/>'],
+  sparkle: ['f', '<path d="M12 2.5c.4 3.9 1.8 6.6 4.2 8.1 1.3.8 2.9 1.2 4.8 1.4-3.9.4-6.6 1.8-8.1 4.2-.8 1.3-1.2 2.9-1.4 4.8-.4-3.9-1.8-6.6-4.2-8.1-1.3-.8-2.9-1.2-4.8-1.4 3.9-.4 6.6-1.8 8.1-4.2.8-1.3 1.2-2.9 1.4-4.8z"/>'],
   more: ['f', '<circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/>'],
   close: ['s', '<path d="M18 6 6 18M6 6l12 12"/>'],
   back: ['s', '<path d="m15 18-6-6 6-6"/>'],
@@ -346,6 +347,8 @@ class SpotifyApi {
   playlistItems(id, offset = 0) { return this.req('GET', `/playlists/${id}/items`, { query: { limit: 50, offset, additional_types: 'track,episode' } }); }
   likedTracks(offset = 0) { return this.req('GET', '/me/tracks', { query: { limit: 50, offset } }); }
   search(q) { return this.req('GET', '/search', { query: { q, type: 'track,album,playlist', limit: 10 } }); }
+  searchTracks(q) { return this.req('GET', '/search', { query: { q, type: 'track', limit: 10 } }); }
+  artistTopTracks(id) { return this.req('GET', `/artists/${id}/top-tracks`, { query: { market: 'from_token' } }); }
   isSaved(uri) { return this.req('GET', '/me/library/contains', { query: { uris: uri } }); }
   save(uri) { return this.req('PUT', '/me/library', { query: { uris: uri } }); }
   unsave(uri) { return this.req('DELETE', '/me/library', { query: { uris: uri } }); }
@@ -569,7 +572,9 @@ class DemoApi {
       playlists: { items: this.lists.filter((l) => match(l.name)) },
     };
   }
-  async isSaved(uri) { return [this.saved.has(uri)]; }
+  async isSaved(uris) { return uris.split(',').map((u) => this.saved.has(u)); }
+  async artistTopTracks(id) { await this._lag(); return { tracks: this.tracks.filter((x) => x.artists[0].id === id) }; }
+  async searchTracks() { return { tracks: { items: [] } }; }
   async save(uri) { await this._lag(); this.saved.add(uri); }
   async unsave(uri) { await this._lag(); this.saved.delete(uri); }
 
@@ -1235,6 +1240,13 @@ function updateContext(s) {
   } else if (ctx?.type === 'show') {
     type = 'Подкаст';
   }
+  // Играет микс «Умного перемешивания»: подсвечиваем подобранные треки
+  const isNew = item && smart.recs.has(item.uri);
+  if (item && !ctx && smart.all.has(item.uri)) {
+    type = isNew ? '✦ Новое для тебя' : 'Умное перемешивание';
+    name = isNew ? 'Понравится — жми ♥' : name;
+  }
+  $('#contextType').classList.toggle('smart', !!isNew);
   $('#contextType').textContent = type;
   $('#contextName').textContent = name || '—';
 }
@@ -1974,6 +1986,104 @@ function pagedList(parent, fetchPage, renderItem, emptyText) {
 }
 
 /* ---------- Медиатека ---------- */
+/* ---------- Умное перемешивание ----------
+   Своё подобие Smart Shuffle: Spotify не даёт сторонним приложениям рекомендации,
+   поэтому «новое» берём у артистов, которых ты слушаешь, — их популярные треки и свежие
+   релизы, которых нет в твоих любимых. Смешиваем: три твоих трека, потом один новый. */
+const smart = { recs: new Set(), all: new Set() };
+
+function shuffled(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+
+// Выполняет задачи параллельно, но не больше n одновременно (чтобы Spotify не ругался на частые запросы)
+async function inBatches(items, n, fn) {
+  const out = [];
+  for (let i = 0; i < items.length; i += n) out.push(...await Promise.all(items.slice(i, i + n).map((x) => fn(x).catch(() => null))));
+  return out;
+}
+
+async function artistNewTracks(a) {
+  let top = [];
+  try { top = (await api.artistTopTracks(a.id))?.tracks || []; } catch {}
+  if (!top.length && a.name) {
+    try { top = (await api.searchTracks(`artist:"${a.name}"`))?.tracks?.items || []; } catch {}
+  }
+  // Свежий релиз артиста
+  let fresh = [];
+  try {
+    const albums = ((await api.artistAlbums(a.id, 0))?.items || []).filter(Boolean)
+      .sort((x, y) => (y.release_date || '').localeCompare(x.release_date || ''));
+    if (albums[0]) {
+      const tr = (await api.albumTracks(albums[0].id, 0))?.items || [];
+      fresh = tr.slice(0, 3).map((t) => ({ ...t, album: t.album || albums[0] }));
+    }
+  } catch {}
+  return [...shuffled(top).slice(0, 4), ...fresh];
+}
+
+async function notSaved(tracks) {
+  const out = [];
+  for (let i = 0; i < tracks.length; i += 20) {
+    const part = tracks.slice(i, i + 20);
+    try {
+      const r = await api.isSaved(part.map((t) => t.uri).join(','));
+      part.forEach((t, k) => { if (!r?.[k]) out.push(t); });
+    } catch { out.push(...part); }
+  }
+  return out;
+}
+
+/** base — твои треки (объекты Spotify). Собирает и включает микс до 100 треков. */
+async function smartShuffle(base) {
+  if (!base.length) { toast('Сначала нужны любимые треки'); return false; }
+  toast('✦ Подбираю новые треки для тебя…');
+  const own = new Set(base.map((t) => t.uri));
+  // Артисты: кого больше всего в твоих треках + твой топ за месяц
+  const count = new Map();
+  for (const t of base) {
+    const a = t.artists?.[0];
+    if (a?.id) count.set(a.id, { a, n: (count.get(a.id)?.n || 0) + 1 });
+  }
+  const fromBase = [...count.values()].sort((x, y) => y.n - x.n).slice(0, 8).map((x) => x.a);
+  let top = [];
+  try { top = (await api.topItems('artists', 'short_term'))?.items || []; } catch {}
+  const artists = [...new Map([...fromBase, ...top.slice(0, 6)].map((a) => [a.id, a])).values()].slice(0, 12);
+
+  const found = (await inBatches(artists, 4, artistNewTracks)).flat().filter((t) => t?.uri && !own.has(t.uri));
+  const unique = [...new Map(found.map((t) => [t.uri, t])).values()];
+  const recs = shuffled(await notSaved(unique));
+
+  // Три своих — один новый
+  const mine = shuffled(base);
+  const list = [];
+  smart.recs = new Set();
+  while (list.length < 100 && (mine.length || recs.length)) {
+    for (let k = 0; k < 3 && mine.length && list.length < 100; k++) list.push(mine.pop());
+    if (recs.length && list.length < 100) { const r = recs.pop(); smart.recs.add(r.uri); list.push(r); }
+    if (!mine.length && !recs.length) break;
+  }
+  smart.all = new Set(list.map((t) => t.uri));
+  if (!smart.recs.size) toast('Новых треков не нашлось — играю твои вперемешку');
+  const ok = await playOn({ uris: list.map((t) => t.uri) }, false);
+  const n = smart.recs.size;
+  if (ok && n) toast(`✦ Умное перемешивание: ${n} ${plural(n, 'новый трек', 'новых трека', 'новых треков')}`);
+  return ok;
+}
+
+// Загрузить побольше любимых треков (до 300) для умного перемешивания
+async function likedPool(limit = 300) {
+  const out = [];
+  for (let offset = 0; offset < limit; offset += 50) {
+    const r = await api.likedTracks(offset);
+    out.push(...(r?.items || []).map((it) => it?.track).filter((t) => t?.uri && !t.uri.startsWith('spotify:local:')));
+    if (!r?.next) break;
+  }
+  return out;
+}
+
 /* ---------- Главный экран и мини-плеер (как в Spotify) ----------
    Главная, поиск и медиатека открываются на самом экране; плеер свёрнут в полоску внизу
    и выезжает по нажатию. Настройки, устройства и очередь — по-прежнему шторками. */
@@ -2272,7 +2382,16 @@ function playlistView(p) {
             } }),
         ),
       );
-      body.append(hero);
+      body.append(hero, el('button', { class: 'btn-smart', type: 'button', html: icon('sparkle') + 'Умное перемешивание · с новыми треками',
+        onclick: async () => {
+          const tracks = [];
+          for (let o = 0; o < 300; o += 50) {
+            const r = await api.playlistItems(p.id, o).catch(() => null);
+            tracks.push(...(r?.items || []).map((it) => it?.item || it?.track).filter((t) => t?.uri && t.type !== 'episode' && !t.uri.startsWith('spotify:local:')));
+            if (!r?.next) break;
+          }
+          if (await smartShuffle(tracks)) closeSheet();
+        } }));
       pagedList(body, (o) => api.playlistItems(p.id, o), (it, i) => {
         const t = it?.item || it?.track;
         return trackRow(t, async () => { if (await playOn({ context_uri: p.uri, offset: { position: i } })) closeSheet(); });
@@ -2309,7 +2428,8 @@ function likedView() {
           onclick: () => start({ position: 0 }, false) }),
         el('button', { class: 'btn-ghost', type: 'button', html: icon('shuffle') + 'Вперемешку',
           onclick: () => start({ position: Math.floor(Math.random() * Math.max(total, 1)) }, true) }),
-      ));
+      ), el('button', { class: 'btn-smart', type: 'button', html: icon('sparkle') + 'Умное перемешивание · с новыми треками',
+        onclick: async () => { if (await smartShuffle(await likedPool())) closeSheet(); } }));
       pagedList(body, async (o) => {
         const r = await api.likedTracks(o);
         if (r?.total) total = r.total;
