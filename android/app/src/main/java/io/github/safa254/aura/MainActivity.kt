@@ -38,6 +38,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         catchCrashes()
+        log("приложение запущено" + if (savedInstanceState != null) " (восстановлено)" else "")
         web = PlayerWebView(this)
         web.setBackgroundColor(Color.parseColor("#120e18"))
         setContentView(web)
@@ -52,6 +53,7 @@ class MainActivity : Activity() {
         web.webViewClient = object : WebViewClient() {
             // Процесс страницы упал (например, Android выгрузил его) — перезагружаем, а не падаем целиком
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                log(if (detail.didCrash()) "процесс страницы упал" else "Android выгрузил процесс страницы")
                 runOnUiThread { recreate() }
                 return true
             }
@@ -181,10 +183,16 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        log("на экране")
         web.onResume()
         NowBar.start(this)
         // Разрешение могли выдать в настройках, пока Aura была свёрнута
         headphones.start()
+    }
+
+    override fun onStop() {
+        log("ушло с экрана" + if (NowBar.localPlayback) ", музыка играет" else "")
+        super.onStop()
     }
 
     override fun onPause() {
@@ -195,6 +203,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        log("приложение закрыто" + if (isFinishing) "" else " системой")
         headphones.stop()
         web.destroy()
         super.onDestroy()
@@ -272,6 +281,13 @@ class MainActivity : Activity() {
             AuraWidget.fromPage(this@MainActivity, json)
             NowBar.running?.let { runOnUiThread { it.poke() } }
         }
+
+        /** Журнал приложения (для «Журнала плеера»). */
+        @JavascriptInterface
+        fun getLog(): String = prefs.getString("log", "") ?: ""
+
+        @JavascriptInterface
+        fun clearLog() = prefs.edit().remove("log").apply()
 
         /** Музыка заиграла / остановилась во встроенном плеере Aura. */
         @JavascriptInterface
@@ -474,6 +490,13 @@ class MainActivity : Activity() {
             } catch (_: Exception) {
             }
         }
+    }
+
+    // Короткий журнал событий приложения: показывается в «Журнале плеера» на странице
+    private fun log(text: String) {
+        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+        val lines = (prefs.getString("log", "") ?: "").lines().filter { it.isNotBlank() }.takeLast(39)
+        prefs.edit().putString("log", (lines + "$time  [Android] $text").joinToString("\n")).commit()
     }
 
     private val prefs by lazy { getSharedPreferences("aura", MODE_PRIVATE) }

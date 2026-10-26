@@ -918,6 +918,7 @@ function setLocalStatus(status, error = '') {
 
 function loadLocalPlayer() {
   if (!api || api.isDemo || local.player || local.status === 'loading') return;
+  localLog('страница загружена, запускаю плеер');
   if (!hasStreamingScope()) { setLocalStatus('error', 'нужно войти заново, чтобы разрешить воспроизведение'); return; }
   setLocalStatus('loading');
   window.onSpotifyWebPlaybackSDKReady = initLocalPlayer;
@@ -956,7 +957,8 @@ function initLocalPlayer() {
     const playing = !!st && !st.paused;
     if (playing !== local.playing) {
       local.playing = playing;
-      localLog(playing ? 'играет' : 'пауза' + (document.hidden ? ' (Aura свёрнута)' : ''));
+      const pos = st ? ` · ${st.track_window?.current_track?.name || '?'} ${fmtTime(st.position || 0)}` : ' · плеер пуст';
+      localLog((playing ? 'играет' : 'пауза' + (document.hidden ? ' (Aura свёрнута)' : '')) + pos);
       NATIVE?.localPlayback?.(playing);
       local.render?.();
     }
@@ -1032,12 +1034,14 @@ function localCard() {
       }
     }
     if (settings.playInAura) {
-      const log = store.get('playerLog', []);
+      // Свой журнал страницы + журнал Android-приложения, по времени
+      const native = (NATIVE?.getLog?.() || '').split('\n').filter(Boolean);
+      const log = [...store.get('playerLog', []), ...native].sort();
       if (log.length) {
         parts.push(el('details', { class: 'player-log' },
           el('summary', {}, 'Журнал плеера'),
-          el('pre', {}, log.slice().reverse().join('\n')),
-          el('button', { class: 'btn-ghost', type: 'button', onclick: () => { store.set('playerLog', []); local.render(); } }, 'Очистить')));
+          el('pre', {}, log.reverse().join('\n')),
+          el('button', { class: 'btn-ghost', type: 'button', onclick: () => { store.set('playerLog', []); NATIVE?.clearLog?.(); local.render(); } }, 'Очистить')));
       }
     }
     card.replaceChildren(...parts);
