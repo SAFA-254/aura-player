@@ -13,8 +13,10 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.SizeF
 import android.view.View
 import android.widget.RemoteViews
 import android.widget.Toast
@@ -197,25 +199,46 @@ class AuraWidget : AppWidgetProvider() {
             val ids = ids(ctx)
             if (ids.isEmpty()) return
             val s = cached(ctx)
-            val v = RemoteViews(ctx.packageName, R.layout.widget)
-            v.setTextViewText(R.id.title, s.optString("title").ifEmpty { "Aura" })
-            v.setTextViewText(R.id.artist, s.optString("artist").ifEmpty { "Нажми, чтобы открыть" })
-
             val cover: Bitmap? = coverFile(ctx).takeIf { it.exists() }?.let {
                 BitmapFactory.decodeFile(it.path, BitmapFactory.Options().apply { inSampleSize = 2 })
             }
+            val bg = cover?.let { blurred(it) }
+            val hp = Headphones.connectedNow(ctx)?.let { Headphones.label(it) }
+            val big = views(ctx, R.layout.widget, s, cover, bg, hp, small = false)
+            val views = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // Растянули в один ряд — компактный вид, иначе большой
+                RemoteViews(
+                    mapOf(
+                        SizeF(180f, 40f) to views(ctx, R.layout.widget_small, s, cover, bg, hp, small = true),
+                        SizeF(180f, 110f) to big,
+                    ),
+                )
+            } else {
+                big
+            }
+            AppWidgetManager.getInstance(ctx).updateAppWidget(ids, views)
+        }
+
+        private fun views(
+            ctx: Context, layout: Int, s: JSONObject, cover: Bitmap?, bg: Bitmap?, hp: String?, small: Boolean,
+        ): RemoteViews {
+            val v = RemoteViews(ctx.packageName, layout)
+            v.setTextViewText(R.id.title, s.optString("title").ifEmpty { "Aura" })
+            v.setTextViewText(R.id.artist, s.optString("artist").ifEmpty { "Нажми, чтобы открыть" })
             if (cover != null) v.setImageViewBitmap(R.id.cover, cover) else v.setImageViewResource(R.id.cover, R.drawable.ic_note)
+            if (bg != null) v.setImageViewBitmap(R.id.bg, bg) else v.setImageViewResource(R.id.bg, android.R.color.transparent)
 
             v.setImageViewResource(R.id.toggleIcon, if (s.optBoolean("playing")) R.drawable.ic_pause else R.drawable.ic_play)
             val accent = try { Color.parseColor(s.optString("accent")) } catch (_: Exception) { Color.parseColor("#C9A7FF") }
             v.setInt(R.id.toggleBg, "setColorFilter", accent)
 
-            val hp = Headphones.connectedNow(ctx)
-            if (hp != null) {
-                v.setViewVisibility(R.id.hpRow, View.VISIBLE)
-                v.setTextViewText(R.id.headphones, Headphones.label(hp))
+            if (small) {
+                v.setViewVisibility(R.id.headphones, if (hp != null) View.VISIBLE else View.GONE)
+                v.setTextViewText(R.id.headphones, "🎧 " + (hp ?: ""))
             } else {
-                v.setViewVisibility(R.id.hpRow, View.GONE)
+                v.setViewVisibility(R.id.hpRow, if (hp != null) View.VISIBLE else View.GONE)
+                v.setTextViewText(R.id.headphones, hp ?: "")
+                v.setOnClickPendingIntent(R.id.prev, button(ctx, ACTION_PREV, 1))
             }
 
             val open = PendingIntent.getActivity(
@@ -225,10 +248,40 @@ class AuraWidget : AppWidgetProvider() {
             v.setOnClickPendingIntent(R.id.cover, open)
             v.setOnClickPendingIntent(R.id.title, open)
             v.setOnClickPendingIntent(R.id.artist, open)
-            v.setOnClickPendingIntent(R.id.prev, button(ctx, ACTION_PREV, 1))
             v.setOnClickPendingIntent(R.id.toggle, button(ctx, ACTION_TOGGLE, 2))
             v.setOnClickPendingIntent(R.id.next, button(ctx, ACTION_NEXT, 3))
-            AppWidgetManager.getInstance(ctx).updateAppWidget(ids, v)
+            return v
+        }
+
+        // Размытая обложка для фона, как в самой Aura: уменьшаем и несколько раз усредняем соседей,
+        // при растягивании на весь виджет получается мягкое цветное пятно
+        private fun blurred(src: Bitmap): Bitmap {
+            val n = 36
+            val small = Bitmap.createScaledBitmap(src, n, n, true)
+            val px = IntArray(n * n)
+            small.getPixels(px, 0, n, 0, 0, n, n)
+            val tmp = IntArray(n * n)
+            repeat(3) {
+                boxPass(px, tmp, n, horizontal = true)
+                boxPass(tmp, px, n, horizontal = false)
+            }
+            return Bitmap.createBitmap(px, n, n, Bitmap.Config.ARGB_8888)
+        }
+
+        private fun boxPass(from: IntArray, to: IntArray, n: Int, horizontal: Boolean) {
+            val r = 3
+            for (line in 0 until n) {
+                for (k in 0 until n) {
+                    var a = 0; var rr = 0; var g = 0; var b = 0; var c = 0
+                    for (d in -r..r) {
+                        val j = (k + d).coerceIn(0, n - 1)
+                        val p = if (horizontal) from[line * n + j] else from[j * n + line]
+                        rr += (p shr 16) and 0xff; g += (p shr 8) and 0xff; b += p and 0xff; a += 1; c++
+                    }
+                    val out = (0xff shl 24) or ((rr / c) shl 16) or ((g / c) shl 8) or (b / c)
+                    if (horizontal) to[line * n + k] = out else to[k * n + line] = out
+                }
+            }
         }
 
         private fun button(ctx: Context, action: String, code: Int): PendingIntent =

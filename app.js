@@ -1015,9 +1015,9 @@ function progressLoop() {
 /* ---------- Наушники (только в Android-приложении) ---------- */
 const hp = { cur: null, lowWarned: false };
 
-// «Buds3 FE пользователя Бекар…» → «Buds3 FE», «Tyler's WH-1000XM5» → «WH-1000XM5»
+// «Buds3 FE пользователя Бекар…» → «Buds3 FE», «WH-1000XM6 (Bekarys)» → «WH-1000XM6»
 function cleanDeviceName(n) {
-  return (n || '').replace(/\s+пользователя(\s.*)?$/i, '').replace(/^.+?['’]s\s+/, '').trim() || 'Наушники';
+  return (n || '').replace(/\s+пользователя(\s.*)?$/i, '').replace(/^.+?['’]s\s+/, '').replace(/\s*\([^)]*\)\s*$/, '').trim() || 'Наушники';
 }
 function headphonesLabel(h) {
   return cleanDeviceName(h.name) + (h.battery != null ? ` · ${h.battery}%` : '');
@@ -1630,7 +1630,7 @@ function devicesView(message) {
           devs.forEach((d) => {
             const [ic, label] = DEVICE_TYPES[d.type] || ['speaker', d.type];
             list.append(row({
-              iconName: ic, title: d.name, sub: d.is_active ? 'Играет сейчас' : label, current: d.is_active,
+              iconName: ic, title: cleanDeviceName(d.name), sub: d.is_active ? 'Играет сейчас' : label, current: d.is_active,
               onClick: async () => {
                 if (d.is_active) { closeSheet(); return; }
                 ui.seq++;

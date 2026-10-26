@@ -188,6 +188,7 @@ class Headphones(private val ctx: Context, private val onChange: (String) -> Uni
             val name = (alias ?: dev.name ?: "Наушники")
                 .replace(Regex("\\s+пользователя(\\s.*)?$", RegexOption.IGNORE_CASE), "")
                 .replace(Regex("^.+?['’]s\\s+"), "")
+                .replace(Regex("\\s*\\([^)]*\\)\\s*$"), "")
                 .trim()
             val level = hidden<Int>(dev, "getBatteryLevel") ?: -1
             return if (level >= 0) "$name · $level%" else name
