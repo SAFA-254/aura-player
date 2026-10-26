@@ -347,7 +347,7 @@ class SpotifyApi {
   playlistItems(id, offset = 0) { return this.req('GET', `/playlists/${id}/items`, { query: { limit: 50, offset, additional_types: 'track,episode' } }); }
   likedTracks(offset = 0) { return this.req('GET', '/me/tracks', { query: { limit: 50, offset } }); }
   search(q) { return this.req('GET', '/search', { query: { q, type: 'track,album,playlist', limit: 10 } }); }
-  searchTracks(q) { return this.req('GET', '/search', { query: { q, type: 'track', limit: 10 } }); }
+  searchTracks(q, offset = 0) { return this.req('GET', '/search', { query: { q, type: 'track', limit: 10, offset } }); }
   artistTopTracks(id) { return this.req('GET', `/artists/${id}/top-tracks`, { query: { market: 'from_token' } }); }
   isSaved(uri) { return this.req('GET', '/me/library/contains', { query: { uris: uri } }); }
   save(uri) { return this.req('PUT', '/me/library', { query: { uris: uri } }); }
@@ -1243,8 +1243,8 @@ function updateContext(s) {
   // Играет микс «Умного перемешивания»: подсвечиваем подобранные треки
   const isNew = item && smart.recs.has(item.uri);
   if (item && !ctx && smart.all.has(item.uri)) {
-    type = isNew ? '✦ Новое для тебя' : 'Умное перемешивание';
-    name = isNew ? 'Понравится — жми ♥' : name;
+    type = isNew ? '✦ ' + smart.recs.get(item.uri) : 'Умное перемешивание';
+    name = isNew ? 'Новое для тебя · понравится — жми ♥' : name;
   }
   $('#contextType').classList.toggle('smart', !!isNew);
   $('#contextType').textContent = type;
@@ -1990,7 +1990,7 @@ function pagedList(parent, fetchPage, renderItem, emptyText) {
    Своё подобие Smart Shuffle: Spotify не даёт сторонним приложениям рекомендации,
    поэтому «новое» берём у артистов, которых ты слушаешь, — их популярные треки и свежие
    релизы, которых нет в твоих любимых. Смешиваем: три твоих трека, потом один новый. */
-const smart = { recs: new Set(), all: new Set() };
+const smart = { recs: new Map(), all: new Set() }; // recs: uri → откуда взялся трек
 
 function shuffled(arr) {
   const a = [...arr];
@@ -2005,13 +2005,15 @@ async function inBatches(items, n, fn) {
   return out;
 }
 
+const sameName = (a, b) => (a || '').toLowerCase().trim() === (b || '').toLowerCase().trim();
+
+// Популярные треки и свежий релиз артиста
 async function artistNewTracks(a) {
   let top = [];
   try { top = (await api.artistTopTracks(a.id))?.tracks || []; } catch {}
   if (!top.length && a.name) {
-    try { top = (await api.searchTracks(`artist:"${a.name}"`))?.tracks?.items || []; } catch {}
+    try { top = ((await api.searchTracks(`artist:"${a.name}"`))?.tracks?.items || []).filter((t) => t.artists?.some((x) => sameName(x.name, a.name))); } catch {}
   }
-  // Свежий релиз артиста
   let fresh = [];
   try {
     const albums = ((await api.artistAlbums(a.id, 0))?.items || []).filter(Boolean)
@@ -2021,16 +2023,59 @@ async function artistNewTracks(a) {
       fresh = tr.slice(0, 3).map((t) => ({ ...t, album: t.album || albums[0] }));
     }
   } catch {}
-  return [...shuffled(top).slice(0, 4), ...fresh];
+  return [...shuffled(top).slice(0, 4), ...fresh].map((t) => ({ t, why: 'Новое от ' + a.name }));
 }
 
-async function notSaved(tracks) {
+// Открытый API Deezer (JSONP — работает без ключа и без CORS): «похожие артисты»
+function jsonp(url, ms = 8000) {
+  return new Promise((resolve, reject) => {
+    const cb = '__dz' + Math.random().toString(36).slice(2);
+    const sc = document.createElement('script');
+    const timer = setTimeout(() => done(null, new Error('timeout')), ms);
+    function done(v, e) { clearTimeout(timer); delete window[cb]; sc.remove(); if (e) reject(e); else resolve(v); }
+    window[cb] = (d) => done(d);
+    sc.onerror = () => done(null, new Error('load'));
+    sc.src = url + (url.includes('?') ? '&' : '?') + 'output=jsonp&callback=' + cb;
+    document.head.append(sc);
+  });
+}
+
+async function similarArtistNames(name) {
+  const s = await jsonp('https://api.deezer.com/search/artist?limit=1&q=' + encodeURIComponent(name));
+  const id = s?.data?.[0]?.id;
+  if (!id) return [];
+  const r = await jsonp(`https://api.deezer.com/artist/${id}/related?limit=15`);
+  return (r?.data || []).map((x) => x.name).filter(Boolean);
+}
+
+// Треки похожих артистов, которых у тебя ещё нет
+async function similarTracks(seed, known) {
+  const names = shuffled((await similarArtistNames(seed.name)).filter((n) => !known.has(n.toLowerCase()))).slice(0, 3);
   const out = [];
-  for (let i = 0; i < tracks.length; i += 20) {
-    const part = tracks.slice(i, i + 20);
+  for (const n of names) {
     try {
-      const r = await api.isSaved(part.map((t) => t.uri).join(','));
-      part.forEach((t, k) => { if (!r?.[k]) out.push(t); });
+      const items = ((await api.searchTracks(`artist:"${n}"`))?.tracks?.items || []).filter((t) => t.artists?.some((x) => sameName(x.name, n)));
+      shuffled(items.slice(0, 6)).slice(0, 2).forEach((t) => out.push({ t, why: 'Похоже на ' + seed.name }));
+    } catch {}
+  }
+  return out;
+}
+
+// Треки тех же жанров у других исполнителей (если Spotify отдаёт жанры)
+async function genreTracks(genre, known) {
+  const r = await api.searchTracks(`genre:"${genre}"`, Math.floor(Math.random() * 40));
+  return (r?.tracks?.items || [])
+    .filter((t) => !t.artists?.some((x) => known.has((x.name || '').toLowerCase())))
+    .slice(0, 5).map((t) => ({ t, why: 'В стиле: ' + genre }));
+}
+
+async function notSaved(list) {
+  const out = [];
+  for (let i = 0; i < list.length; i += 20) {
+    const part = list.slice(i, i + 20);
+    try {
+      const r = await api.isSaved(part.map((x) => x.t.uri).join(','));
+      part.forEach((x, k) => { if (!r?.[k]) out.push(x); });
     } catch { out.push(...part); }
   }
   return out;
@@ -2039,36 +2084,48 @@ async function notSaved(tracks) {
 /** base — твои треки (объекты Spotify). Собирает и включает микс до 100 треков. */
 async function smartShuffle(base) {
   if (!base.length) { toast('Сначала нужны любимые треки'); return false; }
-  toast('✦ Подбираю новые треки для тебя…');
+  toast('✦ Подбираю новые и похожие треки…');
   const own = new Set(base.map((t) => t.uri));
   // Артисты: кого больше всего в твоих треках + твой топ за месяц
   const count = new Map();
   for (const t of base) {
-    const a = t.artists?.[0];
-    if (a?.id) count.set(a.id, { a, n: (count.get(a.id)?.n || 0) + 1 });
+    for (const a of t.artists || []) if (a?.id) count.set(a.id, { a, n: (count.get(a.id)?.n || 0) + 1 });
   }
   const fromBase = [...count.values()].sort((x, y) => y.n - x.n).slice(0, 8).map((x) => x.a);
   let top = [];
   try { top = (await api.topItems('artists', 'short_term'))?.items || []; } catch {}
   const artists = [...new Map([...fromBase, ...top.slice(0, 6)].map((a) => [a.id, a])).values()].slice(0, 12);
+  const known = new Set([...count.values()].map((x) => (x.a.name || '').toLowerCase()));
 
-  const found = (await inBatches(artists, 4, artistNewTracks)).flat().filter((t) => t?.uri && !own.has(t.uri));
-  const unique = [...new Map(found.map((t) => [t.uri, t])).values()];
-  const recs = shuffled(await notSaved(unique));
+  // Жанры: из твоего топа артистов (с 2026 года Spotify может их не отдавать — тогда пропускаем)
+  const genres = new Map();
+  for (const a of top) for (const g of a.genres || []) genres.set(g, (genres.get(g) || 0) + 1);
+  const topGenres = [...genres.entries()].sort((x, y) => y[1] - x[1]).slice(0, 4).map(([g]) => g);
 
-  // Три своих — один новый
+  const [fromArtists, fromSimilar, fromGenres] = await Promise.all([
+    inBatches(artists, 4, artistNewTracks),
+    inBatches(shuffled(artists).slice(0, 6), 3, (a) => similarTracks(a, known)),
+    inBatches(topGenres, 2, (g) => genreTracks(g, known)),
+  ]);
+  // Чередуем источники, чтобы новое было разным: от своих артистов, похожие, по жанру
+  const pools = [fromArtists, fromSimilar, fromGenres].map((p) => shuffled(p.flat().filter((x) => x?.t?.uri && !own.has(x.t.uri))));
+  const mixed = [];
+  while (pools.some((p) => p.length)) for (const p of pools) if (p.length) mixed.push(p.pop());
+  const unique = [...new Map(mixed.map((x) => [x.t.uri, x])).values()];
+  const recs = (await notSaved(unique)).reverse();
+
+  // Два своих — один новый
   const mine = shuffled(base);
   const list = [];
-  smart.recs = new Set();
+  smart.recs = new Map();
   while (list.length < 100 && (mine.length || recs.length)) {
-    for (let k = 0; k < 3 && mine.length && list.length < 100; k++) list.push(mine.pop());
-    if (recs.length && list.length < 100) { const r = recs.pop(); smart.recs.add(r.uri); list.push(r); }
-    if (!mine.length && !recs.length) break;
+    for (let k = 0; k < 2 && mine.length && list.length < 100; k++) list.push(mine.pop());
+    if (recs.length && list.length < 100) { const r = recs.pop(); smart.recs.set(r.t.uri, r.why); list.push(r.t); }
   }
   smart.all = new Set(list.map((t) => t.uri));
-  if (!smart.recs.size) toast('Новых треков не нашлось — играю твои вперемешку');
-  const ok = await playOn({ uris: list.map((t) => t.uri) }, false);
   const n = smart.recs.size;
+  if (!n) toast('Новых треков не нашлось — играю твои вперемешку');
+  const ok = await playOn({ uris: list.map((t) => t.uri) }, false);
   if (ok && n) toast(`✦ Умное перемешивание: ${n} ${plural(n, 'новый трек', 'новых трека', 'новых треков')}`);
   return ok;
 }
