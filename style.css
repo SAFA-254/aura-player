@@ -641,3 +641,5 @@ body.hub-mode .toast { bottom: calc(var(--safe-bottom) + 150px); }
 }
 .btn-smart svg { width: 18px; height: 18px; }
 .eyebrow.smart { color: var(--accent); }
+
+#btnShuffle.smart { color: var(--accent); }

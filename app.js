@@ -847,7 +847,12 @@ function render(s, fresh) {
   $('#btnPlay').setAttribute('aria-label', s.is_playing ? 'Пауза' : 'Играть');
   $('#art').classList.toggle('paused', !s.is_playing);
 
-  $('#btnShuffle').classList.toggle('on', !!s.shuffle_state);
+  // Три режима, как в Spotify: выкл → перемешивание → умное перемешивание (✦)
+  const smartOn = smartActive(s);
+  setIcon($('#btnShuffle'), smartOn ? 'sparkle' : 'shuffle');
+  $('#btnShuffle').classList.toggle('on', !!s.shuffle_state || smartOn);
+  $('#btnShuffle').classList.toggle('smart', smartOn);
+  $('#btnShuffle').setAttribute('aria-label', smartOn ? 'Умное перемешивание' : 'Перемешать');
   const rep = s.repeat_state || 'off';
   setIcon($('#btnRepeat'), rep === 'track' ? 'repeat1' : 'repeat');
   $('#btnRepeat').classList.toggle('on', rep !== 'off');
@@ -1811,9 +1816,49 @@ function skip(dir) {
   command(() => (dir > 0 ? api.next() : api.prev()));
 }
 function toggleShuffle() {
-  const on = !ui.pb?.shuffle_state;
-  command(() => api.shuffle(on), (s) => { s.shuffle_state = on; });
-  toast(on ? 'Перемешивание включено' : 'Перемешивание выключено');
+  const s = ui.pb;
+  // Умное → выкл: дальше микс доигрывает по порядку, пометки «✦» убираем
+  if (smartActive(s)) {
+    smart.all = new Set();
+    smart.recs = new Map();
+    command(() => api.shuffle(false), (st) => { st.shuffle_state = false; });
+    toast('Перемешивание выключено');
+    return;
+  }
+  // Перемешивание → умное
+  if (s?.shuffle_state) { startSmartFromPlayer(); return; }
+  command(() => api.shuffle(true), (st) => { st.shuffle_state = true; });
+  toast('Перемешивание включено · нажми ещё раз для умного ✦');
+}
+
+function smartActive(s = ui.pb) {
+  return !!(s?.item && !s.context && smart.all.has(s.item.uri));
+}
+
+// Умное перемешивание из того, что играет сейчас: любимые, плейлист, альбом или артист
+async function startSmartFromPlayer() {
+  const ctx = ui.pb?.context;
+  let base = [];
+  toast('✦ Подбираю новые и похожие треки…');
+  try {
+    if (ctx?.type === 'playlist') {
+      const id = ctx.uri.split(':').pop();
+      for (let o = 0; o < 300; o += 50) {
+        const r = await api.playlistItems(id, o).catch(() => null);
+        base.push(...(r?.items || []).map((it) => it?.item || it?.track));
+        if (!r?.next) break;
+      }
+    } else if (ctx?.type === 'album') {
+      const al = ui.pb.item?.album;
+      base = ((await api.albumTracks(ctx.uri.split(':').pop(), 0))?.items || []).map((t) => ({ ...t, album: t.album || al }));
+    } else if (ctx?.type === 'artist') {
+      base = (await api.artistTopTracks(ctx.uri.split(':').pop()))?.tracks || [];
+    }
+  } catch {}
+  base = base.filter((t) => t?.uri && t.type !== 'episode' && !t.uri.startsWith('spotify:local:'));
+  // Чужой плейлист (Spotify не отдаёт его треки), «Любимые» или пусто — берём любимые треки
+  if (base.length < 5) base = await likedPool();
+  await smartShuffle(base);
 }
 function cycleRepeat() {
   const order = ['off', 'context', 'track'];
