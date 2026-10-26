@@ -848,7 +848,7 @@ function render(s, fresh) {
   $('#art').classList.toggle('paused', !s.is_playing);
 
   // Три режима, как в Spotify: выкл → перемешивание → умное перемешивание (✦)
-  const smartOn = smartActive(s);
+  const smartOn = smartActive();
   setIcon($('#btnShuffle'), smartOn ? 'sparkle' : 'shuffle');
   $('#btnShuffle').classList.toggle('on', !!s.shuffle_state || smartOn);
   $('#btnShuffle').classList.toggle('smart', smartOn);
@@ -1247,7 +1247,7 @@ function updateContext(s) {
   }
   // Играет микс «Умного перемешивания»: подсвечиваем подобранные треки
   const isNew = item && smart.recs.has(item.uri);
-  if (item && !ctx && smart.all.has(item.uri)) {
+  if (item && smart.on && smart.all.has(item.uri)) {
     type = isNew ? '✦ ' + smart.recs.get(item.uri) : 'Умное перемешивание';
     name = isNew ? 'Новое для тебя · понравится — жми ♥' : name;
   }
@@ -1731,6 +1731,7 @@ async function ensureStarted(opts, deviceId) {
 // Ставим его до старта (тогда Spotify сам начнёт со случайного трека) и подтверждаем после:
 // если до старта активного устройства не было, первая попытка не сработает.
 async function playOn(opts = {}, shuffle = null) {
+  smart.on = false; // включили что-то другое — умный режим выключается (кнопка микса включит его снова)
   if (shuffle != null) await setShuffleQuiet(shuffle);
   const ok = await startPlayback(opts);
   if (ok && shuffle != null) {
@@ -1818,7 +1819,8 @@ function skip(dir) {
 function toggleShuffle() {
   const s = ui.pb;
   // Умное → выкл: дальше микс доигрывает по порядку, пометки «✦» убираем
-  if (smartActive(s)) {
+  if (smartActive()) {
+    smart.on = false;
     smart.all = new Set();
     smart.recs = new Map();
     command(() => api.shuffle(false), (st) => { st.shuffle_state = false; });
@@ -1831,9 +1833,7 @@ function toggleShuffle() {
   toast('Перемешивание включено · нажми ещё раз для умного ✦');
 }
 
-function smartActive(s = ui.pb) {
-  return !!(s?.item && !s.context && smart.all.has(s.item.uri));
-}
+function smartActive() { return smart.on; }
 
 // Умное перемешивание из того, что играет сейчас: любимые, плейлист, альбом или артист
 async function startSmartFromPlayer() {
@@ -1858,7 +1858,19 @@ async function startSmartFromPlayer() {
   base = base.filter((t) => t?.uri && t.type !== 'episode' && !t.uri.startsWith('spotify:local:'));
   // Чужой плейлист (Spotify не отдаёт его треки), «Любимые» или пусто — берём любимые треки
   if (base.length < 5) base = await likedPool();
-  await smartShuffle(base, true);
+  if (!base.length) { toast('Сначала нужны любимые треки'); return; }
+  // Текущую песню не трогаем: микс просто встаёт в очередь «Далее»
+  const list = await buildSmartMix(base, 30);
+  smart.on = true;
+  render(ui.pb, false);
+  try { await api.shuffle(true); if (ui.pb) ui.pb.shuffle_state = true; } catch {}
+  let added = 0;
+  for (const t of list) {
+    try { await api.addToQueue(t.uri); added++; } catch (e) { if (e.status === 429) await sleep(1500); }
+    await sleep(120);
+  }
+  const n = [...smart.recs.keys()].filter((u) => list.some((t) => t.uri === u)).length;
+  toast(added ? `✦ Умное перемешивание: в очереди ${added} ${plural(added, 'трек', 'трека', 'треков')}, из них ${n} ${plural(n, 'новый', 'новых', 'новых')}` : 'Не удалось добавить треки в очередь');
 }
 function cycleRepeat() {
   const order = ['off', 'context', 'track'];
@@ -2035,7 +2047,7 @@ function pagedList(parent, fetchPage, renderItem, emptyText) {
    Своё подобие Smart Shuffle: Spotify не даёт сторонним приложениям рекомендации,
    поэтому «новое» берём у артистов, которых ты слушаешь, — их популярные треки и свежие
    релизы, которых нет в твоих любимых. Смешиваем: три твоих трека, потом один новый. */
-const smart = { recs: new Map(), all: new Set() }; // recs: uri → откуда взялся трек
+const smart = { recs: new Map(), all: new Set(), on: false }; // recs: uri → откуда взялся трек
 
 function shuffled(arr) {
   const a = [...arr];
@@ -2126,12 +2138,8 @@ async function notSaved(list) {
   return out;
 }
 
-/**
- * base — твои треки (объекты Spotify). Собирает и включает микс до 100 треков.
- * keepCurrent — не обрывать то, что играет: текущий трек идёт первым с той же секунды.
- */
-async function smartShuffle(base, keepCurrent = false) {
-  if (!base.length) { toast('Сначала нужны любимые треки'); return false; }
+/** Собирает микс: два твоих трека — один новый. Возвращает список треков (до size). */
+async function buildSmartMix(base, size) {
   toast('✦ Подбираю новые и похожие треки…');
   const own = new Set(base.map((t) => t.uri));
   // Артисты: кого больше всего в твоих треках + твой топ за месяц
@@ -2163,27 +2171,26 @@ async function smartShuffle(base, keepCurrent = false) {
   const recs = (await notSaved(unique)).reverse();
 
   // Два своих — один новый
-  const mine = shuffled(base);
+  const curUri = ui.pb?.item?.uri;
+  const mine = shuffled(base.filter((t) => t.uri !== curUri));
   const list = [];
   smart.recs = new Map();
-  while (list.length < 100 && (mine.length || recs.length)) {
-    for (let k = 0; k < 2 && mine.length && list.length < 100; k++) list.push(mine.pop());
-    if (recs.length && list.length < 100) { const r = recs.pop(); smart.recs.set(r.t.uri, r.why); list.push(r.t); }
-  }
-  const cur = ui.pb?.item;
-  const keep = keepCurrent && cur?.type === 'track' && cur.uri && !cur.uri.startsWith('spotify:local:');
-  if (keep) {
-    const i = list.findIndex((t) => t.uri === cur.uri);
-    if (i >= 0) list.splice(i, 1);
-    list.unshift(cur);
-    if (list.length > 100) list.length = 100;
+  while (list.length < size && (mine.length || recs.length)) {
+    for (let k = 0; k < 2 && mine.length && list.length < size; k++) list.push(mine.pop());
+    if (recs.length && list.length < size) { const r = recs.pop(); smart.recs.set(r.t.uri, r.why); list.push(r.t); }
   }
   smart.all = new Set(list.map((t) => t.uri));
+  return list;
+}
+
+/** Кнопка в «Любимых» и плейлистах: сразу включает микс до 100 треков. */
+async function smartShuffle(base) {
+  if (!base.length) { toast('Сначала нужны любимые треки'); return false; }
+  const list = await buildSmartMix(base, 100);
   const n = smart.recs.size;
   if (!n) toast('Новых треков не нашлось — играю твои вперемешку');
-  const opts = { uris: list.map((t) => t.uri) };
-  if (keep) opts.position_ms = Math.round(currentPos());
-  const ok = await playOn(opts, false);
+  const ok = await playOn({ uris: list.map((t) => t.uri) }, false);
+  smart.on = ok;
   if (ok && n) toast(`✦ Умное перемешивание: ${n} ${plural(n, 'новый трек', 'новых трека', 'новых треков')}`);
   return ok;
 }
