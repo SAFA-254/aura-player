@@ -1743,7 +1743,7 @@ function settingsView() {
               NATIVE.openOverlaySettings();
             }
           })));
-        body.append(nowBarCard());
+        if (NATIVE.mediaSupported?.()) body.append(nowBarCard());
         if (hp.cur?.sony) body.append(sonyCard());
         body.append(alarmCard());
       }

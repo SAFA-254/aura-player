@@ -282,6 +282,15 @@ class MainActivity : Activity() {
         }
 
         // Карточка Aura в Now Bar вместо Spotify
+        /** Объявлен ли в этой сборке сервис доступа к уведомлениям. */
+        @JavascriptInterface
+        fun mediaSupported(): Boolean = try {
+            packageManager.getServiceInfo(android.content.ComponentName(this@MainActivity, MediaListener::class.java), 0)
+            true
+        } catch (_: Exception) {
+            false
+        }
+
         @JavascriptInterface
         fun mediaAccess(): Boolean = MediaListener.hasAccess(this@MainActivity)
 
