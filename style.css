@@ -648,6 +648,8 @@ body.hub-mode .toast { bottom: calc(var(--safe-bottom) + 150px); }
    Полупрозрачное стекло: размывает и чуть преломляет то, что под ним, блик по верхнему краю.
    Размытие тяжёлое, поэтому фон плеера в этой теме стоит на месте. */
 body[data-theme="glass"] {
+  --lg-blur: 18px;
+  --lg-sat: 1.3;
   --lg-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.07));
   --lg-border: rgba(255, 255, 255, 0.26);
   --lg-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 -1px 1px rgba(255, 255, 255, 0.12),
@@ -665,11 +667,11 @@ body[data-theme="glass"] :is(.mini, .tabbar, .chip, .chip-btn, .quick, .play-btn
   background: var(--lg-bg);
   border: 1px solid var(--lg-border);
   box-shadow: var(--lg-shadow);
-  -webkit-backdrop-filter: blur(18px) saturate(1.3);
-  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
 }
 body[data-theme="glass"] :is(.mini, .tabbar, .play-btn) {
-  backdrop-filter: url(#lg-refract) blur(16px) saturate(1.9) brightness(1.08);
+  backdrop-filter: url(#lg-refract) blur(var(--lg-blur)) saturate(calc(var(--lg-sat) + 0.4)) brightness(1.08);
 }
 /* Блик сверху, как у стекла */
 body[data-theme="glass"] :is(.mini, .tabbar, .play-btn, .quick, .settings-card)::after {
@@ -706,4 +708,25 @@ body[data-theme="glass"] .art img { border-radius: 26px; }
 body[data-theme="glass"] .btn-primary {
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 95%, #fff), var(--accent));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 10px 28px -8px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* Варианты стекла */
+body[data-theme="glass"][data-glass="clear"] {
+  --lg-blur: 6px; --lg-sat: 1.5;
+  --lg-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02));
+}
+body[data-theme="glass"][data-glass="frost"] {
+  --lg-blur: 34px; --lg-sat: 1.1;
+  --lg-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.14));
+  --lg-border: rgba(255, 255, 255, 0.34);
+}
+body[data-theme="glass"][data-glass="dark"] {
+  --lg-blur: 22px; --lg-sat: 1.2;
+  --lg-bg: linear-gradient(180deg, rgba(20, 18, 26, 0.45), rgba(8, 7, 12, 0.62));
+  --lg-border: rgba(255, 255, 255, 0.14);
+}
+body[data-theme="glass"][data-glass="tint"] {
+  --lg-blur: 18px; --lg-sat: 1.6;
+  --lg-bg: linear-gradient(180deg, color-mix(in srgb, var(--accent) 34%, transparent), color-mix(in srgb, var(--accent) 12%, transparent));
+  --lg-border: color-mix(in srgb, var(--accent) 50%, rgba(255, 255, 255, 0.3));
 }

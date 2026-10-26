@@ -1858,7 +1858,7 @@ async function startSmartFromPlayer() {
   base = base.filter((t) => t?.uri && t.type !== 'episode' && !t.uri.startsWith('spotify:local:'));
   // Чужой плейлист (Spotify не отдаёт его треки), «Любимые» или пусто — берём любимые треки
   if (base.length < 5) base = await likedPool();
-  await smartShuffle(base);
+  await smartShuffle(base, true);
 }
 function cycleRepeat() {
   const order = ['off', 'context', 'track'];
@@ -2126,8 +2126,11 @@ async function notSaved(list) {
   return out;
 }
 
-/** base — твои треки (объекты Spotify). Собирает и включает микс до 100 треков. */
-async function smartShuffle(base) {
+/**
+ * base — твои треки (объекты Spotify). Собирает и включает микс до 100 треков.
+ * keepCurrent — не обрывать то, что играет: текущий трек идёт первым с той же секунды.
+ */
+async function smartShuffle(base, keepCurrent = false) {
   if (!base.length) { toast('Сначала нужны любимые треки'); return false; }
   toast('✦ Подбираю новые и похожие треки…');
   const own = new Set(base.map((t) => t.uri));
@@ -2167,10 +2170,20 @@ async function smartShuffle(base) {
     for (let k = 0; k < 2 && mine.length && list.length < 100; k++) list.push(mine.pop());
     if (recs.length && list.length < 100) { const r = recs.pop(); smart.recs.set(r.t.uri, r.why); list.push(r.t); }
   }
+  const cur = ui.pb?.item;
+  const keep = keepCurrent && cur?.type === 'track' && cur.uri && !cur.uri.startsWith('spotify:local:');
+  if (keep) {
+    const i = list.findIndex((t) => t.uri === cur.uri);
+    if (i >= 0) list.splice(i, 1);
+    list.unshift(cur);
+    if (list.length > 100) list.length = 100;
+  }
   smart.all = new Set(list.map((t) => t.uri));
   const n = smart.recs.size;
   if (!n) toast('Новых треков не нашлось — играю твои вперемешку');
-  const ok = await playOn({ uris: list.map((t) => t.uri) }, false);
+  const opts = { uris: list.map((t) => t.uri) };
+  if (keep) opts.position_ms = Math.round(currentPos());
+  const ok = await playOn(opts, false);
   if (ok && n) toast(`✦ Умное перемешивание: ${n} ${plural(n, 'новый трек', 'новых трека', 'новых треков')}`);
   return ok;
 }
@@ -2698,6 +2711,13 @@ function settingsView() {
       api.me().then((m) => { user.textContent = m?.display_name || m?.id || 'Spotify'; }).catch(() => { user.textContent = 'Spotify'; });
       body.append(el('div', { class: 'settings-card' }, el('h3', {}, api.isDemo ? 'Демо-режим' : 'Аккаунт'), user));
 
+      const glassBox = el('div', { hidden: settings.theme !== 'glass' },
+        el('p', { style: 'margin-top:14px' }, 'Какое стекло'),
+        chipGroup([['clear', 'Прозрачное'], ['frost', 'Матовое'], ['dark', 'Тёмное'], ['tint', 'Цветное']], settings.glass, (v) => {
+          settings.glass = v;
+          saveSettings();
+          applyLook();
+        }));
       body.append(el('div', { class: 'settings-card' },
         el('h3', {}, 'Тема'),
         el('p', {}, 'Цвета всё равно подстраиваются под обложку.'),
@@ -2705,7 +2725,9 @@ function settingsView() {
           settings.theme = v;
           saveSettings();
           applyLook();
-        })));
+          glassBox.hidden = v !== 'glass';
+        }),
+        glassBox));
 
       body.append(el('div', { class: 'settings-card' },
         el('h3', {}, 'Визуализатор'),
@@ -3317,10 +3339,11 @@ function drawViz(now) {
 /* =====================================================================
    Внешний вид, экран
    ===================================================================== */
-const settings = Object.assign({ theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true, playInAura: !!window.AuraNative?.engineStart }, store.get('settings', {}));
+const settings = Object.assign({ glass: 'clear', theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true, playInAura: !!window.AuraNative?.engineStart }, store.get('settings', {}));
 function saveSettings() { store.set('settings', settings); }
 function applyLook() {
   document.body.dataset.theme = settings.theme;
+  document.body.dataset.glass = settings.glass;
   updateViz();
 }
 
@@ -3712,6 +3735,7 @@ function handOffToApp() {
 async function boot() {
   bindUI();
   document.body.dataset.theme = settings.theme;
+  document.body.dataset.glass = settings.glass;
   if (!NATIVE && new URLSearchParams(location.search).get('state')?.startsWith('app-')) { handOffToApp(); return; }
   if (NATIVE) {
     NATIVE.setClientId(Auth.clientId());
