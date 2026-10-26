@@ -211,8 +211,9 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // Шторки в Aura закрываются через историю страницы
-        if (web.canGoBack()) web.goBack() else @Suppress("DEPRECATION") super.onBackPressed()
+        // Шторки в Aura закрываются через историю страницы. Дальше — как в музыкальных
+        // приложениях: просто сворачиваемся, иначе вместе с Aura закроется и музыка.
+        if (web.canGoBack()) web.goBack() else moveTaskToBack(true)
     }
 
     private fun shareImage(dataUrl: String, title: String): Boolean {

@@ -893,6 +893,15 @@ function localLog(text) {
   local.render?.();
 }
 document.addEventListener('visibilitychange', () => { if (settings.playInAura) localLog(document.hidden ? 'Aura свёрнута' : 'Aura открыта'); });
+window.addEventListener('offline', () => { if (settings.playInAura) localLog('пропал интернет'); });
+window.addEventListener('online', () => { if (settings.playInAura) localLog('интернет вернулся'); });
+// Пока играет музыка — отметка раз в 15 секунд: если отметки прервутся, значит страницу остановили
+setInterval(() => {
+  if (!local.player || !local.playing) return;
+  local.player.getCurrentState().then((st) => {
+    localLog(`жива · ${st ? (st.paused ? 'пауза' : 'играет') + ' ' + fmtTime(st.position) : 'плеер пуст'}`);
+  }).catch(() => localLog('жива · плеер не ответил'));
+}, 15000);
 
 function hasStreamingScope() {
   const t = store.get('token');
