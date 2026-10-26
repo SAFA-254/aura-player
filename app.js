@@ -1231,9 +1231,9 @@ function headphonesLabel(h) {
 function updateDeviceChip() {
   const d = ui.pb?.device;
   // Наушники показываем, только когда музыка играет на этом телефоне
-  const h = hp.cur && (!d || d.type === 'Smartphone') ? hp.cur : null;
+  const h = hp.cur && (!d || d.type === 'Smartphone' || d.id === local.deviceId) ? hp.cur : null;
   setIcon($('#deviceIcon'), h ? (/buds|pods|wf-|ear/i.test(h.name) ? 'earbuds' : 'headphones') : 'speaker');
-  $('#deviceName').textContent = h ? headphonesLabel(h) : d?.name || 'Устройство';
+  $('#deviceName').textContent = h ? headphonesLabel(h) : d && d.id === local.deviceId ? 'Aura' : d?.name || 'Устройство';
   $('#btnDevices').classList.toggle('low', !!h && h.battery != null && h.battery <= 15);
 }
 
@@ -2068,9 +2068,12 @@ function devicesView(message) {
           list.replaceChildren();
           if (!devs.length) list.append(note('Устройств не найдено. Открой Spotify на телефоне или компьютере — он появится здесь.'));
           devs.forEach((d) => {
-            const [ic, label] = DEVICE_TYPES[d.type] || ['speaker', d.type];
+            const here = d.id === local.deviceId;
+            // Плеер внутри Aura Spotify показывает как «компьютер» — подписываем по-человечески
+            const [ic, label] = here ? ['music', 'Звук прямо из Aura'] : DEVICE_TYPES[d.type] || ['speaker', d.type];
+            const title = here ? (NATIVE ? 'Aura на этом телефоне' : 'Aura в этом браузере') : cleanDeviceName(d.name);
             list.append(row({
-              iconName: ic, title: cleanDeviceName(d.name), sub: d.is_active ? 'Играет сейчас' : label, current: d.is_active,
+              iconName: ic, title, sub: d.is_active ? 'Играет сейчас' : label, current: d.is_active,
               onClick: async () => {
                 if (d.is_active) { closeSheet(); return; }
                 ui.seq++;
@@ -2090,11 +2093,14 @@ function devicesView(message) {
         } catch (e) {
           list.replaceChildren(note('Не удалось получить список устройств'));
         }
-        extra.append(el('div', { class: 'settings-card' },
-          el('p', {}, 'Телефон появляется в списке, когда приложение Spotify на нём открыто. Если его нет — открой Spotify и вернись сюда.'),
-          el('a', { class: 'btn-primary', href: 'spotify:', html: icon('spotify') + 'Открыть Spotify' }),
-          el('button', { class: 'btn-ghost', type: 'button', html: icon('refresh') + 'Обновить список', onclick: load }),
-        ));
+        extra.append(settings.playInAura
+          ? el('div', { class: 'settings-card' },
+            el('p', {}, 'Музыка играет прямо в Aura — приложение Spotify для этого не нужно. Другие устройства (компьютер, колонка) появляются здесь, когда на них открыт Spotify.'),
+            el('button', { class: 'btn-ghost', type: 'button', html: icon('refresh') + 'Обновить список', onclick: load }))
+          : el('div', { class: 'settings-card' },
+            el('p', {}, 'Телефон появляется в списке, когда приложение Spotify на нём открыто. Если его нет — открой Spotify и вернись сюда.'),
+            el('a', { class: 'btn-primary', href: 'spotify:', html: icon('spotify') + 'Открыть Spotify' }),
+            el('button', { class: 'btn-ghost', type: 'button', html: icon('refresh') + 'Обновить список', onclick: load })));
       };
       load();
     },
