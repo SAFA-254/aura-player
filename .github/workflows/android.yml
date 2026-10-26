@@ -1,0 +1,48 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon
+
+      - name: Rename
+        run: cp android/app/build/outputs/apk/release/app-release.apk Aura.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aura
+          path: Aura.apk
+
+      # Постоянная ссылка для телефона: .../releases/latest/download/Aura.apk
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          gh release create "$TAG" Aura.apk \
+            --title "Aura для Android $TAG" \
+            --notes "Скачай Aura.apk на телефон и открой. Ставится поверх прошлой версии." \
+            --latest

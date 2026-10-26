@@ -508,3 +508,9 @@ body[data-theme="minimal"] .eyebrow { letter-spacing: 0.06em; }
   .clock { display: block; font-size: 22px; font-weight: 800; letter-spacing: 0.04em; color: var(--text-2); font-variant-numeric: tabular-nums; }
   .ly-line { font-size: clamp(26px, 2.4vw, 40px); }
 }
+
+/* ---------- Android-приложение ---------- */
+.chip.low svg { color: #ff6b6b; }
+.handoff { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: var(--bg2); text-align: center; }
+.handoff h2 { font-size: 28px; font-weight: 800; margin: 0; }
+a.btn-primary { text-decoration: none; }

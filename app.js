@@ -29,6 +29,9 @@ const CONFIG = {
 };
 const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
 const API = 'https://api.spotify.com/v1';
+// Мост к Android-приложению Aura (есть только внутри него)
+const NATIVE = window.AuraNative || null;
+const APK_URL = 'https://github.com/SAFA-254/aura-player/releases/latest/download/Aura.apk';
 const DEFAULT_THEME = { bg1: '#2a1f3d', bg2: '#120e18', accent: '#c9a7ff', onAccent: '#120e18', meta: '#16121c' };
 
 /* ---------- Утилиты ---------- */
@@ -112,6 +115,8 @@ const ICONS = {
   repeat1: ['s', REPEAT_PATH + '<path d="M11 10.5 12.5 9.5v5" stroke-width="1.8"/>'],
   heart: ['s', HEART_PATH],
   heartFill: ['f', HEART_PATH],
+  headphones: ['s', '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>'],
+  earbuds: ['s', '<path d="M7 3.5A3.5 3.5 0 0 1 10.5 7v2.5a3 3 0 0 1-2 2.83V19a1.5 1.5 0 0 1-3 0v-6.9A3.5 3.5 0 0 1 3.5 8.6V7A3.5 3.5 0 0 1 7 3.5z"/><path d="M17 3.5A3.5 3.5 0 0 0 13.5 7v2.5a3 3 0 0 0 2 2.83V19a1.5 1.5 0 0 0 3 0v-6.9a3.5 3.5 0 0 0 2-3.5V7A3.5 3.5 0 0 0 17 3.5z"/>'],
   speaker: ['s', '<rect x="5" y="2.5" width="14" height="19" rx="2.5"/><circle cx="12" cy="14" r="3.5"/><path d="M12 6.5h.01"/>'],
   phone: ['s', '<rect x="6.5" y="2" width="11" height="20" rx="2.5"/><path d="M11 18h2"/>'],
   computer: ['s', '<rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20.5h8M12 16.5v4"/>'],
@@ -194,7 +199,9 @@ const Auth = {
   async login() {
     const verifier = randomString(64);
     const challenge = base64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
-    const state = randomString(16);
+    // Из приложения входим через обычный браузер (там уже есть вход в Spotify и Google),
+    // а страница в браузере по метке app- вернёт код обратно в приложение.
+    const state = (NATIVE ? 'app-' : '') + randomString(16);
     store.set('pkce', { verifier, state });
     const params = new URLSearchParams({
       client_id: this.clientId(),
@@ -205,7 +212,9 @@ const Auth = {
       scope: CONFIG.scopes,
       state,
     });
-    location.assign('https://accounts.spotify.com/authorize?' + params);
+    const url = 'https://accounts.spotify.com/authorize?' + params;
+    if (NATIVE) NATIVE.openExternal(url);
+    else location.assign(url);
   },
 
   // Возвращает true, если мы только что вернулись со страницы входа Spotify.
@@ -680,6 +689,7 @@ function applyTheme(t) {
   root.setProperty('--accent', t.accent);
   root.setProperty('--on-accent', t.onAccent);
   $('#themeColor').setAttribute('content', t.meta);
+  NATIVE?.setBarColor(t.meta, t.bg2);
 }
 
 let bgFront = null;
@@ -805,7 +815,7 @@ function render(s, fresh) {
   $('#btnShuffle').disabled = !!dis.toggling_shuffle;
   $('#seek').disabled = !!dis.seeking || !item;
 
-  $('#deviceName').textContent = s.device?.name || 'Устройство';
+  updateDeviceChip();
   updateContext(s);
   updateProgress(true);
 }
@@ -973,6 +983,44 @@ function progressLoop() {
 }
 
 /* ---------- Команды ---------- */
+/* ---------- Наушники (только в Android-приложении) ---------- */
+const hp = { cur: null, lowWarned: false };
+
+// «Buds3 FE пользователя Бекар…» → «Buds3 FE», «Tyler's WH-1000XM5» → «WH-1000XM5»
+function cleanDeviceName(n) {
+  return (n || '').replace(/\s+пользователя(\s.*)?$/i, '').replace(/^.+?['’]s\s+/, '').trim() || 'Наушники';
+}
+function headphonesLabel(h) {
+  return cleanDeviceName(h.name) + (h.battery != null ? ` · ${h.battery}%` : '');
+}
+
+function updateDeviceChip() {
+  const d = ui.pb?.device;
+  // Наушники показываем, только когда музыка играет на этом телефоне
+  const h = hp.cur && (!d || d.type === 'Smartphone') ? hp.cur : null;
+  setIcon($('#deviceIcon'), h ? (/buds|pods|wf-|ear/i.test(h.name) ? 'earbuds' : 'headphones') : 'speaker');
+  $('#deviceName').textContent = h ? headphonesLabel(h) : d?.name || 'Устройство';
+  $('#btnDevices').classList.toggle('low', !!h && h.battery != null && h.battery <= 15);
+}
+
+// Приложение вызывает это при подключении/отключении наушников и смене заряда
+window.auraHeadphones = (h) => {
+  const prev = hp.cur;
+  hp.cur = h?.connected ? h : null;
+  const cur = hp.cur;
+  if (cur && prev?.address !== cur.address) {
+    hp.lowWarned = false;
+    if (api) toast('Подключены ' + headphonesLabel(cur));
+  }
+  if (cur?.battery != null) {
+    if (cur.battery <= 15 && !hp.lowWarned) {
+      hp.lowWarned = true;
+      toast(`У ${cleanDeviceName(cur.name)} осталось ${cur.battery}% — пора зарядить`);
+    } else if (cur.battery > 20) hp.lowWarned = false;
+  }
+  updateDeviceChip();
+};
+
 async function command(fn, optimistic) {
   ui.seq++;
   if (optimistic && ui.pb) {
@@ -1485,6 +1533,14 @@ function settingsView() {
           updateViz();
         })));
 
+      if (NATIVE) {
+        body.append(el('div', { class: 'settings-card' },
+          el('h3', {}, 'Наушники'),
+          el('p', {}, hp.cur
+            ? 'Сейчас подключены: ' + headphonesLabel(hp.cur) + '. Модель и заряд видны на кнопке устройства внизу.'
+            : 'Подключи Bluetooth-наушники — модель и заряд появятся на кнопке устройства внизу. Если не появляются, разреши Aura «Устройства поблизости» в настройках Android.')));
+      }
+
       body.append(el('div', { class: 'settings-card' },
         el('h3', {}, 'Экран'),
         switchRow('Не гасить экран, пока Aura открыта', settings.wakeLock, (on) => {
@@ -1497,7 +1553,13 @@ function settingsView() {
 
       const install = el('div', { class: 'settings-card' },
         el('h3', {}, 'Установить на телефон'),
-        isStandalone()
+        NATIVE
+          ? el('p', {}, 'Ты в приложении Aura для Android. Новые версии — по ссылке ', el('a', { href: APK_URL }, 'Aura.apk'), '.')
+          : /Android/i.test(navigator.userAgent)
+          ? el('div', {},
+              el('p', {}, 'Приложение Aura для Android показывает модель и заряд наушников. Скачай и открой файл, затем разреши установку.'),
+              el('a', { class: 'btn-primary', href: APK_URL, html: icon('download') + 'Скачать Aura.apk' }))
+          : isStandalone()
           ? el('p', {}, 'Aura уже установлена как приложение.')
           : el('div', {},
               el('p', {}, 'Aura ставится на главный экран как обычное приложение и открывается без браузера.'),
@@ -1925,6 +1987,7 @@ async function shareCard() {
     toast('Не получилось сделать картинку');
     return;
   }
+  if (NATIVE && NATIVE.shareImage(c.toDataURL('image/png'), `${item.name} — ${itemArtists(item)}`)) return;
   const file = new File([blob], 'aura-now-playing.png', { type: 'image/png' });
   if (navigator.canShare?.({ files: [file] })) {
     try {
@@ -2056,6 +2119,7 @@ function applyLook() {
 const wake = { sentinel: null };
 async function updateWakeLock() {
   const want = settings.wakeLock && !!api && !document.hidden;
+  if (NATIVE) { NATIVE.keepScreenOn(want); return; }
   if (want && !wake.sentinel && 'wakeLock' in navigator) {
     try {
       wake.sentinel = await navigator.wakeLock.request('screen');
@@ -2297,6 +2361,7 @@ function startApp(a) {
   poll();
   updateViz();
   updateWakeLock();
+  if (NATIVE) { try { window.auraHeadphones(JSON.parse(NATIVE.headphones())); } catch {} }
 }
 
 function showLogin(message) {
@@ -2410,9 +2475,21 @@ function bindUI() {
   bindSheetDrag();
 }
 
+// Вход начат в приложении, а Spotify вернул нас в обычный браузер — отдаём код приложению
+function handOffToApp() {
+  const link = 'aura://auth' + location.search;
+  document.body.append(el('div', { class: 'handoff' },
+    el('div', { class: 'login-inner' },
+      el('h2', {}, 'Почти готово'),
+      el('p', { class: 'lead' }, 'Возвращаемся в приложение Aura…'),
+      el('a', { class: 'btn-primary', href: link }, 'Открыть Aura'))));
+  location.href = link;
+}
+
 async function boot() {
   bindUI();
   document.body.dataset.theme = settings.theme;
+  if (!NATIVE && new URLSearchParams(location.search).get('state')?.startsWith('app-')) { handOffToApp(); return; }
   try {
     if (await Auth.handleRedirect()) { startApp(new SpotifyApi()); return; }
   } catch (e) {
