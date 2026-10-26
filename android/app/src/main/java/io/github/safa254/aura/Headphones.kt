@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
@@ -118,6 +119,7 @@ class Headphones(private val ctx: Context, private val onChange: (String) -> Uni
         o.put("address", dev.address)
         val level = level(dev)
         o.put("battery", if (level >= 0) level else JSONObject.NULL)
+        o.put("sony", SonyAnc.isSony(dev))
         return o.toString()
     }
 
@@ -129,7 +131,7 @@ class Headphones(private val ctx: Context, private val onChange: (String) -> Uni
         }
     }
 
-    private fun current(): BluetoothDevice? {
+    fun current(): BluetoothDevice? {
         if (adapter == null || !allowed()) return null
         return try {
             if (!adapter.isEnabled) return null
@@ -154,15 +156,43 @@ class Headphones(private val ctx: Context, private val onChange: (String) -> Uni
         return battery[dev.address] ?: -1
     }
 
-    // Скрытые методы Android: есть на всех телефонах, но не в открытом SDK
-    @Suppress("UNCHECKED_CAST")
-    private fun <T> hidden(target: Any, method: String): T? = try {
-        target.javaClass.getMethod(method).invoke(target) as T?
-    } catch (_: Exception) {
-        null
-    }
-
     companion object {
+        // Скрытые методы Android: есть на всех телефонах, но не в открытом SDK
+        @Suppress("UNCHECKED_CAST")
+        fun <T> hidden(target: Any, method: String): T? = try {
+            target.javaClass.getMethod(method).invoke(target) as T?
+        } catch (_: Exception) {
+            null
+        }
+
+        fun isAudio(dev: BluetoothDevice): Boolean =
+            dev.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.AUDIO_VIDEO
+
+        /** Подключённые наушники без ожидания профилей — для виджета и фоновых событий. */
+        fun connectedNow(ctx: Context): BluetoothDevice? {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+            ) return null
+            val adapter = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter ?: return null
+            return try {
+                if (!adapter.isEnabled) return null
+                adapter.bondedDevices.firstOrNull { isAudio(it) && hidden<Boolean>(it, "isConnected") == true }
+            } catch (_: SecurityException) {
+                null
+            }
+        }
+
+        /** «WH-1000XM5 · 84%» без приписки «пользователя …». */
+        fun label(dev: BluetoothDevice): String {
+            val alias = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) dev.alias else null
+            val name = (alias ?: dev.name ?: "Наушники")
+                .replace(Regex("\\s+пользователя(\\s.*)?$", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("^.+?['’]s\\s+"), "")
+                .trim()
+            val level = hidden<Int>(dev, "getBatteryLevel") ?: -1
+            return if (level >= 0) "$name · $level%" else name
+        }
+
         const val ACTION_BATTERY_LEVEL_CHANGED = "android.bluetooth.device.action.BATTERY_LEVEL_CHANGED"
         const val EXTRA_BATTERY_LEVEL = "android.bluetooth.device.extra.BATTERY_LEVEL"
     }

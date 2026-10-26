@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Base64
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -62,6 +63,8 @@ class MainActivity : Activity() {
         }
 
         web.loadUrl(pageFor(intent))
+        AuraWidget.schedulePeriodic(this)
+        Alarm.schedule(this)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !headphones.allowed()) {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQ_BLUETOOTH)
@@ -118,6 +121,7 @@ class MainActivity : Activity() {
         val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
         when (requestCode) {
             REQ_BLUETOOTH -> headphones.start()
+            REQ_NOTIFY -> {}
             REQ_MIC -> {
                 pendingMic?.let { if (granted) it.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) else it.deny() }
                 pendingMic = null
@@ -134,6 +138,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         web.onPause()
+        AuraWidget.refreshAsync(this)
         super.onPause()
     }
 
@@ -196,7 +201,83 @@ class MainActivity : Activity() {
         } catch (_: Exception) {
             false
         }
+
+        // Вход в Spotify хранится в приложении, чтобы им пользовались виджет, будильник и автозапуск
+        @JavascriptInterface
+        fun getToken(): String = prefs.getString(Spotify.KEY_TOKEN, null) ?: ""
+
+        @JavascriptInterface
+        fun saveToken(json: String) {
+            if (json.isBlank()) prefs.edit().remove(Spotify.KEY_TOKEN).apply()
+            else prefs.edit().putString(Spotify.KEY_TOKEN, json).apply()
+        }
+
+        @JavascriptInterface
+        fun setClientId(id: String) = prefs.edit().putString(Spotify.KEY_CLIENT_ID, id).apply()
+
+        @JavascriptInterface
+        fun nowPlaying(json: String) = AuraWidget.fromPage(this@MainActivity, json)
+
+        @JavascriptInterface
+        fun getAlarm(): String = Alarm.get(this@MainActivity).toString()
+
+        /** Возвращает время следующего звонка в мс (строкой) или "0". */
+        @JavascriptInterface
+        fun setAlarm(json: String): String {
+            askNotifications()
+            return Alarm.set(this@MainActivity, json).toString()
+        }
+
+        @JavascriptInterface
+        fun getAuto(): String = AutoStart.get(this@MainActivity).toString()
+
+        @JavascriptInterface
+        fun setAuto(json: String) {
+            askNotifications()
+            AutoStart.set(this@MainActivity, json)
+        }
+
+        @JavascriptInterface
+        fun overlayAllowed(): Boolean = Settings.canDrawOverlays(this@MainActivity)
+
+        @JavascriptInterface
+        fun openOverlaySettings() = runOnUiThread {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            } catch (_: Exception) {
+            }
+        }
+
+        /** mode: "" — только узнать режим, "nc" | "ambient" | "off". Ответ придёт в window.auraSony(). */
+        @JavascriptInterface
+        fun sony(mode: String, level: Int, voice: String) {
+            val dev = headphones.current()
+            Thread {
+                val res = if (dev == null) {
+                    org.json.JSONObject().put("ok", false).put("error", "Наушники не подключены")
+                } else {
+                    SonyAnc.run(
+                        dev,
+                        mode.ifEmpty { null },
+                        level.takeIf { it > 0 },
+                        voice.takeIf { it.isNotEmpty() }?.let { it == "1" },
+                    )
+                }
+                runOnUiThread { web.evaluateJavascript("window.auraSony && window.auraSony($res)", null) }
+            }.start()
+        }
     }
+
+    private val prefs by lazy { getSharedPreferences("aura", MODE_PRIVATE) }
+
+    private fun askNotifications() = runOnUiThread {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY)
+        }
+    }
+
 
     companion object {
         const val HOST = "safa-254.github.io"
@@ -204,5 +285,6 @@ class MainActivity : Activity() {
         const val HOME = "https://$HOST$PATH/"
         const val REQ_BLUETOOTH = 1
         const val REQ_MIC = 2
+        const val REQ_NOTIFY = 3
     }
 }

@@ -47,13 +47,23 @@ function fetchT(url, opts = {}, ms = 10000) {
 
 const store = {
   get(key, fallback = null) {
+    // В Android-приложении вход хранится в самом приложении — им пользуются виджет и будильник
+    if (NATIVE && key === 'token') {
+      try { const v = NATIVE.getToken(); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
+    }
     try {
       const v = localStorage.getItem('aura.' + key);
       return v === null ? fallback : JSON.parse(v);
     } catch { return fallback; }
   },
-  set(key, value) { try { localStorage.setItem('aura.' + key, JSON.stringify(value)); } catch {} },
-  del(key) { try { localStorage.removeItem('aura.' + key); } catch {} },
+  set(key, value) {
+    if (NATIVE && key === 'token') return NATIVE.saveToken(JSON.stringify(value));
+    try { localStorage.setItem('aura.' + key, JSON.stringify(value)); } catch {}
+  },
+  del(key) {
+    if (NATIVE && key === 'token') return NATIVE.saveToken('');
+    try { localStorage.removeItem('aura.' + key); } catch {}
+  },
 };
 
 function el(tag, attrs = {}, ...children) {
@@ -690,6 +700,24 @@ function applyTheme(t) {
   root.setProperty('--on-accent', t.onAccent);
   $('#themeColor').setAttribute('content', t.meta);
   NATIVE?.setBarColor(t.meta, t.bg2);
+  widgetAccent = t.accent;
+  pushWidget();
+}
+
+// Состояние для виджета на главном экране (только в приложении)
+let widgetAccent = DEFAULT_THEME.accent, widgetLast = '';
+function pushWidget() {
+  if (!NATIVE || !api || api.isDemo) return;
+  const s = ui.pb, item = s?.item;
+  const w = item
+    ? { title: item.name, artist: itemArtists(item), cover: pickImage(itemImages(item), 300), playing: !!s.is_playing, accent: widgetAccent,
+        end: s.is_playing ? Date.now() + item.duration_ms - currentPos() : 0 }
+    : { title: 'Ничего не играет', artist: 'Нажми ▶, чтобы продолжить', cover: '', playing: false, accent: widgetAccent };
+  // end меняется каждую секунду — сравниваем без него
+  const key = JSON.stringify({ ...w, end: 0 });
+  if (key === widgetLast) return;
+  widgetLast = key;
+  NATIVE.nowPlaying(JSON.stringify(w));
 }
 
 let bgFront = null;
@@ -817,6 +845,7 @@ function render(s, fresh) {
 
   updateDeviceChip();
   updateContext(s);
+  pushWidget();
   updateProgress(true);
 }
 
@@ -1020,6 +1049,125 @@ window.auraHeadphones = (h) => {
   }
   updateDeviceChip();
 };
+
+/* ---------- Шумоподавление Sony (только в приложении) ---------- */
+const SONY_MODES = [['nc', 'Шумодав'], ['ambient', 'Звуковой фон'], ['off', 'Выкл']];
+const sony = { state: null, busy: false, render: null };
+
+window.auraSony = (r) => {
+  sony.busy = false;
+  if (r.ok) sony.state = r;
+  else toast(r.error || 'Наушники не ответили');
+  sony.render?.();
+};
+
+function sonyAsk(mode = '', level = 0, voice = '') {
+  sony.busy = true;
+  sony.render?.();
+  NATIVE.sony(mode, level, voice);
+}
+
+function sonyCard() {
+  const card = el('div', { class: 'settings-card sony-card' });
+  sony.render = () => {
+    const st = sony.state;
+    const modes = el('div', { class: 'tabs' });
+    for (const [v, label] of SONY_MODES) {
+      modes.append(el('button', {
+        class: 'tab' + (st?.mode === v ? ' active' : ''), type: 'button', disabled: sony.busy,
+        onclick: () => sonyAsk(v, st?.level || 0, ''),
+      }, label));
+    }
+    const parts = [
+      el('h3', {}, cleanDeviceName(hp.cur?.name) + (sony.busy ? ' · …' : '')),
+      el('p', {}, st ? 'Режим шума' : sony.busy ? 'Связываюсь с наушниками…' : 'Нажми режим, чтобы переключить'),
+      modes,
+    ];
+    if (st?.mode === 'ambient') {
+      const range = el('input', { type: 'range', class: 'range', min: 1, max: 20, value: st.level || 10 });
+      range.addEventListener('change', () => sonyAsk('ambient', Number(range.value), ''));
+      parts.push(el('p', { style: 'margin-top:12px' }, 'Сколько слышно вокруг'), range,
+        switchRow('Фокус на голосе', !!st.voice, (on) => sonyAsk('ambient', st.level || 10, on ? '1' : '0')));
+    }
+    card.replaceChildren(...parts);
+  };
+  sony.render();
+  if (!sony.busy) sonyAsk();
+  return card;
+}
+
+/* ---------- Будильник (только в приложении) ---------- */
+const DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+function untilText(ms) {
+  const min = Math.max(1, Math.round((ms - Date.now()) / 60000));
+  const h = Math.floor(min / 60), m = min % 60;
+  return 'Прозвенит через ' + (h ? `${h} ${plural(h, 'час', 'часа', 'часов')} ` : '') + `${m} мин`;
+}
+
+function alarmCard() {
+  const a = JSON.parse(NATIVE.getAlarm());
+  const info = el('p', { style: 'margin-top:10px' });
+  const save = () => {
+    const next = Number(NATIVE.setAlarm(JSON.stringify(a)));
+    info.textContent = a.enabled ? (next ? untilText(next) : 'Выбери хотя бы один день') : 'Выключен';
+  };
+  const pad = (n) => String(n).padStart(2, '0');
+
+  const time = el('input', { type: 'time', class: 'time-input', value: `${pad(a.hour)}:${pad(a.minute)}` });
+  time.addEventListener('change', () => {
+    const [h, m] = time.value.split(':').map(Number);
+    if (Number.isNaN(h)) return;
+    a.hour = h; a.minute = m;
+    save();
+  });
+
+  const days = el('div', { class: 'tabs' });
+  DAYS.forEach((d, i) => {
+    const n = i + 1;
+    const b = el('button', { class: 'tab' + (a.days.includes(n) ? ' active' : ''), type: 'button' }, d);
+    b.addEventListener('click', () => {
+      a.days = a.days.includes(n) ? a.days.filter((x) => x !== n) : [...a.days, n].sort();
+      b.classList.toggle('active', a.days.includes(n));
+      save();
+    });
+    days.append(b);
+  });
+
+  const pick = el('select', { class: 'select' }, el('option', { value: '' }, 'Что играло последним'));
+  const addOpt = (uri, name) => pick.append(el('option', { value: uri, selected: uri === a.uri }, name));
+  if (a.uri) addOpt(a.uri, a.name || 'Выбранный плейлист');
+  (async () => {
+    try {
+      const me = await getMe();
+      const liked = `spotify:user:${me.id}:collection`;
+      if (liked !== a.uri) addOpt(liked, 'Любимые треки');
+      const page = await api.playlists(0);
+      for (const p of page.items || []) if (p && p.uri !== a.uri) addOpt(p.uri, p.name);
+    } catch {}
+  })();
+  pick.addEventListener('change', () => {
+    a.uri = pick.value;
+    a.name = pick.value ? pick.selectedOptions[0].textContent : '';
+    save();
+  });
+
+  const vol = el('input', { type: 'range', class: 'range', min: 10, max: 100, step: 5, value: a.volume });
+  vol.addEventListener('change', () => { a.volume = Number(vol.value); save(); });
+
+  const card = el('div', { class: 'settings-card' },
+    el('h3', {}, 'Будильник с музыкой'),
+    el('p', {}, 'Включит музыку в Spotify на этом телефоне и плавно прибавит громкость за минуту. Если Spotify не ответит — зазвенит обычный будильник.'),
+    switchRow('Включён', a.enabled, (on) => { a.enabled = on; save(); }),
+    time, days,
+    el('p', { style: 'margin-top:12px' }, 'Что играть'), pick,
+    switchRow('Перемешать', a.shuffle, (on) => { a.shuffle = on; save(); }),
+    el('p', { style: 'margin-top:12px' }, 'Громкость'), vol,
+    info);
+  info.textContent = a.enabled ? 'Включён' : 'Выключен';
+  if (a.enabled) save();
+  return card;
+}
 
 async function command(fn, optimistic) {
   ui.seq++;
@@ -1457,6 +1605,7 @@ function devicesView(message) {
     title: 'Где играть',
     render(body) {
       if (message) body.append(note(message));
+      if (NATIVE && hp.cur?.sony) body.append(sonyCard());
       const list = el('div', { class: 'list' });
       const extra = el('div');
       body.append(list, extra);
@@ -1534,11 +1683,24 @@ function settingsView() {
         })));
 
       if (NATIVE) {
+        const auto = JSON.parse(NATIVE.getAuto());
+        const saveAuto = () => NATIVE.setAuto(JSON.stringify(auto));
         body.append(el('div', { class: 'settings-card' },
           el('h3', {}, 'Наушники'),
           el('p', {}, hp.cur
             ? 'Сейчас подключены: ' + headphonesLabel(hp.cur) + '. Модель и заряд видны на кнопке устройства внизу.'
-            : 'Подключи Bluetooth-наушники — модель и заряд появятся на кнопке устройства внизу. Если не появляются, разреши Aura «Устройства поблизости» в настройках Android.')));
+            : 'Подключи Bluetooth-наушники — модель и заряд появятся на кнопке устройства внизу. Если не появляются, разреши Aura «Устройства поблизости» в настройках Android.'),
+          switchRow('Продолжать музыку, когда наушники подключились', auto.resume, (on) => { auto.resume = on; saveAuto(); }),
+          switchRow('Открывать Aura, когда наушники подключились', auto.open, (on) => {
+            auto.open = on;
+            saveAuto();
+            if (on && !NATIVE.overlayAllowed()) {
+              toast('Разреши Aura «Поверх других приложений» — иначе придёт уведомление вместо открытия');
+              NATIVE.openOverlaySettings();
+            }
+          })));
+        if (hp.cur?.sony) body.append(sonyCard());
+        body.append(alarmCard());
       }
 
       body.append(el('div', { class: 'settings-card' },
@@ -2490,6 +2652,15 @@ async function boot() {
   bindUI();
   document.body.dataset.theme = settings.theme;
   if (!NATIVE && new URLSearchParams(location.search).get('state')?.startsWith('app-')) { handOffToApp(); return; }
+  if (NATIVE) {
+    NATIVE.setClientId(Auth.clientId());
+    // Первая версия приложения хранила вход в странице — переносим
+    try {
+      const old = localStorage.getItem('aura.token');
+      if (old && !NATIVE.getToken()) NATIVE.saveToken(old);
+      localStorage.removeItem('aura.token');
+    } catch {}
+  }
   try {
     if (await Auth.handleRedirect()) { startApp(new SpotifyApi()); return; }
   } catch (e) {
