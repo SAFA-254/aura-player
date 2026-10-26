@@ -243,7 +243,7 @@ class AuraWidget : AppWidgetProvider() {
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                 .setPersisted(false)
                 .build()
-            ctx.getSystemService(JobScheduler::class.java).schedule(job)
+            try { ctx.getSystemService(JobScheduler::class.java).schedule(job) } catch (_: Exception) {}
         }
 
         // Обновиться, когда текущий трек закончится
@@ -260,7 +260,7 @@ class AuraWidget : AppWidgetProvider() {
                 .setOverrideDeadline(delay + 60_000)
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
                 .build()
-            js.schedule(job)
+            try { js.schedule(job) } catch (_: Exception) {}
         }
     }
 }

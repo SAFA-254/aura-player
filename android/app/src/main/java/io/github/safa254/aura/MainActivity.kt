@@ -2,6 +2,9 @@ package io.github.safa254.aura
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -34,6 +37,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        catchCrashes()
         web = WebView(this)
         web.setBackgroundColor(Color.parseColor("#120e18"))
         setContentView(web)
@@ -64,7 +68,8 @@ class MainActivity : Activity() {
 
         web.loadUrl(pageFor(intent))
         AuraWidget.schedulePeriodic(this)
-        Alarm.schedule(this)
+        try { Alarm.schedule(this) } catch (_: Exception) {}
+        showLastCrash()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !headphones.allowed()) {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQ_BLUETOOTH)
@@ -77,6 +82,34 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         // Вернулись из браузера после входа в Spotify
         if (intent.data?.scheme == "aura") web.loadUrl(pageFor(intent))
+    }
+
+    // Если Aura упала — запоминаем причину и показываем её при следующем запуске
+    private fun catchCrashes() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+            try {
+                val text = "Aura ${packageManager.getPackageInfo(packageName, 0).versionName}, Android ${Build.VERSION.RELEASE}\n" +
+                    android.util.Log.getStackTraceString(e)
+                getSharedPreferences("aura", MODE_PRIVATE).edit().putString("crash", text).commit()
+            } catch (_: Exception) {
+            }
+            previous?.uncaughtException(thread, e)
+        }
+    }
+
+    private fun showLastCrash() {
+        val crash = prefs.getString("crash", null) ?: return
+        prefs.edit().remove("crash").apply()
+        AlertDialog.Builder(this)
+            .setTitle("Aura закрылась с ошибкой")
+            .setMessage("Скопируй текст и отправь разработчику — так проще всё починить.\n\n" + crash.take(1500))
+            .setPositiveButton("Скопировать") { _, _ ->
+                getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Aura", crash))
+                Toast.makeText(this, "Скопировано", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Закрыть", null)
+            .show()
     }
 
     private fun pageFor(intent: Intent?): String {
