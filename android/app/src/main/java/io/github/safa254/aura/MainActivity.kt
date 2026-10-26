@@ -271,6 +271,9 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun localPlayback(on: Boolean) = runOnUiThread {
             NowBar.localPlayback = on
+            // Звук играет в отдельном процессе WebView. Свёрнутой Aura Android понижает ему
+            // приоритет и замораживает — вместе с музыкой. Пока играем, держим его важным.
+            web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, !on)
             if (on) NowBar.start(this@MainActivity) else NowBar.running?.poke()
         }
 
