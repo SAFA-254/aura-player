@@ -165,6 +165,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         web.onResume()
+        NowBar.start(this)
         // Разрешение могли выдать в настройках, пока Aura была свёрнута
         headphones.start()
     }
@@ -249,7 +250,68 @@ class MainActivity : Activity() {
         fun setClientId(id: String) = prefs.edit().putString(Spotify.KEY_CLIENT_ID, id).apply()
 
         @JavascriptInterface
-        fun nowPlaying(json: String) = AuraWidget.fromPage(this@MainActivity, json)
+        fun nowPlaying(json: String) {
+            AuraWidget.fromPage(this@MainActivity, json)
+            NowBar.running?.let { runOnUiThread { it.poke() } }
+        }
+
+        // Карточка Aura в Now Bar через интернет
+        @JavascriptInterface
+        fun getNowBar(): Boolean = NowBar.enabled(this@MainActivity)
+
+        @JavascriptInterface
+        fun setNowBar(on: Boolean) {
+            askNotifications()
+            runOnUiThread { NowBar.setEnabled(this@MainActivity, on) }
+        }
+
+        // Остальные настройки Sony и Galaxy Buds; ответ придёт в window.auraHeadset()
+        @JavascriptInterface
+        fun headset(json: String) {
+            val dev = headphones.current()
+            Thread {
+                val res = try {
+                    val cmd = org.json.JSONObject(json)
+                    when {
+                        dev == null -> org.json.JSONObject().put("ok", false).put("error", "Наушники не подключены")
+                        SonyAnc.isSony(dev) -> SonyAnc.command(dev, cmd)
+                        else -> BudsAnc.command(dev, cmd)
+                    }.put("op", cmd.optString("op"))
+                } catch (e: Exception) {
+                    org.json.JSONObject().put("ok", false).put("error", e.message ?: "Ошибка")
+                }
+                runOnUiThread { web.evaluateJavascript("window.auraHeadset && window.auraHeadset($res)", null) }
+            }.start()
+        }
+
+        // Обновления: ответы придут в window.auraUpdate() и window.auraUpdateProgress()
+        @JavascriptInterface
+        fun checkUpdate() {
+            Thread {
+                val res = Updater.check(this@MainActivity)
+                runOnUiThread { web.evaluateJavascript("window.auraUpdate && window.auraUpdate($res)", null) }
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun canInstall(): Boolean = Updater.canInstall(this@MainActivity)
+
+        @JavascriptInterface
+        fun openInstallSettings() = openSettings(
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")),
+        )
+
+        @JavascriptInterface
+        fun installUpdate(url: String) {
+            Thread {
+                val js = { code: String -> runOnUiThread { web.evaluateJavascript(code, null) } }
+                try {
+                    Updater.install(this@MainActivity, url) { pct -> js("window.auraUpdateProgress && window.auraUpdateProgress($pct)") }
+                } catch (e: Exception) {
+                    js("window.auraUpdateProgress && window.auraUpdateProgress(-1)")
+                }
+            }.start()
+        }
 
         @JavascriptInterface
         fun getAlarm(): String = Alarm.get(this@MainActivity).toString()

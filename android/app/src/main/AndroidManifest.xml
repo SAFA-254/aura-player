@@ -20,6 +20,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Открывать Aura при подключении наушников -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Обновления внутри Aura -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Разбудить Spotify кнопкой «Play» -->
     <queries>
@@ -103,6 +105,15 @@
              блокирует установку APK не из магазина в ряде стран, включая Казахстан -->
         <receiver
             android:name=".MediaListener$Buttons"
+            android:exported="false" />
+
+        <service
+            android:name=".NowBar"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <receiver
+            android:name=".Updater$Status"
             android:exported="false" />
 
         <service

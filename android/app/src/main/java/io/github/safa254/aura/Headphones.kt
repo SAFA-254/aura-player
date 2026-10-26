@@ -120,6 +120,7 @@ class Headphones(private val ctx: Context, private val onChange: (String) -> Uni
         val level = level(dev)
         o.put("battery", if (level >= 0) level else JSONObject.NULL)
         o.put("sony", SonyAnc.isSony(dev))
+        o.put("buds", !SonyAnc.isSony(dev) && BudsAnc.isBuds(dev))
         return o.toString()
     }
 

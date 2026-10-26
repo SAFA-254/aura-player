@@ -62,6 +62,81 @@ object SonyAnc {
         }
     }
 
+    /**
+     * Остальные настройки Sony. cmd.op:
+     *  "read" — прочитать всё; "eq" — {preset} или {bands: [clearBass, полосы…]} от -10 до 10;
+     *  "pause" / "stc" / "apo" — {on}: пауза, когда сняли; Speak-to-Chat; выключаться, когда сняли.
+     * Ответ: {ok, anc?, eq?: {preset, bands}, pause?, stc?, apo?}. Блокирующий вызов.
+     */
+    @Synchronized
+    fun command(dev: BluetoothDevice, cmd: JSONObject): JSONObject {
+        closing?.cancel(false)
+        return try {
+            val reused = session?.takeIf { it.address == dev.address && it.alive } != null
+            try {
+                attemptCommand(dev, cmd)
+            } catch (e: Exception) {
+                drop()
+                if (!reused) throw e
+                attemptCommand(dev, cmd)
+            }
+        } catch (e: Exception) {
+            drop()
+            JSONObject().put("ok", false).put("error", e.message ?: "Наушники не ответили")
+        } finally {
+            closing = timer.schedule(Runnable { synchronized(SonyAnc) { drop() } }, IDLE_SEC, TimeUnit.SECONDS)
+        }
+    }
+
+    private fun attemptCommand(dev: BluetoothDevice, cmd: JSONObject): JSONObject {
+        val s = session?.takeIf { it.address == dev.address && it.alive }
+            ?: Session(dev).also { it.init(); session = it; last = null }
+        val out = JSONObject().put("ok", true)
+        val on = cmd.optBoolean("on")
+        when (cmd.optString("op")) {
+            "read" -> {
+                s.get().let { last = it; out.put("anc", state(it)) }
+                readEq(s)?.let { out.put("eq", it) }
+                readFlag(s, 0x01)?.let { out.put("pause", it) }
+                readFlag(s, 0x0c)?.let { out.put("stc", it) }
+                s.request(byteArrayOf(0x26, 0x05), 0x27, 0x05)?.let { out.put("apo", it[2].toInt() == 0x10) }
+            }
+            "eq" -> {
+                val bands = cmd.optJSONArray("bands")
+                val payload = if (bands != null) {
+                    // 0xa0 — «Вручную», дальше число значений и сами значения со сдвигом +10
+                    byteArrayOf(0x58, 0x00, 0xa0.toByte(), bands.length().toByte()) +
+                        ByteArray(bands.length()) { (bands.getInt(it).coerceIn(-10, 10) + 10).toByte() }
+                } else {
+                    byteArrayOf(0x58, 0x00, cmd.optInt("preset").toByte(), 0x00)
+                }
+                s.request(payload, 0x59, 0x00, 800)
+                readEq(s)?.let { out.put("eq", it) }
+            }
+            // У этих настроек Sony «0» значит «включено»
+            "pause" -> { s.request(byteArrayOf(0xf8.toByte(), 0x01, if (on) 0 else 1), 0xf9, 0x01, 600); out.put("pause", on) }
+            "stc" -> { s.request(byteArrayOf(0xf8.toByte(), 0x0c, if (on) 0 else 1, 0x01), 0xf9, 0x0c, 600); out.put("stc", on) }
+            "apo" -> { s.request(byteArrayOf(0x28, 0x05, if (on) 0x10 else 0x11, 0x00), 0x29, 0x05, 600); out.put("apo", on) }
+        }
+        return out
+    }
+
+    private fun readEq(s: Session): JSONObject? {
+        val p = s.request(byteArrayOf(0x56, 0x00), 0x57, 0x00) ?: return null
+        if (p.size < 5) return null
+        val n = (p[3].toInt() and 0xff).coerceAtMost(p.size - 4)
+        val bands = org.json.JSONArray()
+        for (k in 0 until n) bands.put(p[4 + k] - 10)
+        return JSONObject().put("preset", p[2].toInt() and 0xff).put("bands", bands)
+    }
+
+    private fun readFlag(s: Session, kind: Int): Boolean? {
+        val p = s.request(byteArrayOf(0xf6.toByte(), kind.toByte()), 0xf7, kind)
+            ?: s.request(byteArrayOf(0x26, kind.toByte()), 0x27, kind)
+            ?: return null
+        return p.size > 2 && p[2].toInt() == 0
+    }
+
     private const val IDLE_SEC = 20L
     private val timer = Executors.newSingleThreadScheduledExecutor()
     private var closing: ScheduledFuture<*>? = null
@@ -149,6 +224,13 @@ object SonyAnc {
             // Наушники присылают новое состояние; если нет — считаем, что применилось как просили
             return await(800) { it[0].toInt() == NOTIFY || it[0].toInt() == RET }?.takeIf { it.size >= 7 }
                 ?: p.also { it[0] = RET.toByte() }
+        }
+
+        /** Отправить команду и дождаться ответа с кодом ret (и подкодом sub во втором байте). */
+        fun request(payload: ByteArray, ret: Int, sub: Int?, ms: Long = 1500): ByteArray? {
+            commands.clear()
+            send(payload)
+            return await(ms) { (it[0].toInt() and 0xff) == ret && (sub == null || (it.size > 1 && (it[1].toInt() and 0xff) == sub)) }
         }
 
         private fun send(payload: ByteArray) {

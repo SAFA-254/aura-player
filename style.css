@@ -525,3 +525,16 @@ a.btn-primary { text-decoration: none; }
 .time-input { font-size: 34px; font-weight: 800; text-align: center; letter-spacing: 0.02em; }
 .select option { background: #1b1622; color: #fff; }
 .tab[disabled] { opacity: 0.5; }
+
+/* Обновление и эквалайзер */
+.upd-banner {
+  position: fixed; left: 50%; transform: translateX(-50%); top: calc(var(--safe-top) + 8px); z-index: 20;
+  display: flex; align-items: center; gap: 4px; max-width: calc(100% - 32px);
+  padding: 4px 4px 4px 16px; border-radius: 999px; background: var(--accent); color: var(--on-accent);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4); font-weight: 800; font-size: 14px;
+}
+.upd-banner .upd-main { padding: 8px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upd-banner .upd-close { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; }
+.upd-banner .upd-close svg { width: 18px; height: 18px; }
+.band { display: flex; justify-content: space-between; margin-top: 12px; color: var(--text-2); font-size: 13px; }
+.band-val { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }

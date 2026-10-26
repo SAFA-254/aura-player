@@ -1150,13 +1150,209 @@ function sonyCard() {
       parts.push(el('p', { style: 'margin-top:12px' }, 'Сколько слышно вокруг'), range,
         switchRow('Фокус на голосе', !!st.voice, (on) => sonyAsk('ambient', st.level || 10, on ? '1' : '0')));
     }
+    parts.push(...sonyExtraParts());
     card.replaceChildren(...parts);
   };
   // Сами не подключаемся: каждое подключение отбирает наушники у Sony Sound Connect.
   // Показываем последний известный режим, а к наушникам идём только по нажатию.
   if (!sony.state) sony.state = store.get('sony');
+  if (!headset.extra) headset.extra = store.get('sonyExtra');
   sony.render();
   return card;
+}
+
+/* ---------- Эквалайзер и настройки Sony, Galaxy Buds (только в приложении) ---------- */
+const SONY_EQ = [[0x00, 'Выкл'], [0x16, 'Басы'], [0x10, 'Яркий'], [0x11, 'Бодрый'], [0x12, 'Мягкий'], [0x13, 'Спокойный'],
+  [0x14, 'Вокал'], [0x15, 'Высокие'], [0x17, 'Речь'], [0xa0, 'Вручную']];
+const SONY_BANDS = ['Clear Bass', '400 Гц', '1 кГц', '2.5 кГц', '6.3 кГц', '16 кГц'];
+const headset = { extra: null, busy: false };
+
+// Ответы на headset(): read / eq / pause / stc / apo (Sony), anc / eq (Buds)
+window.auraHeadset = (r) => {
+  headset.busy = false;
+  if (!r.ok) {
+    toast(r.error || 'Наушники не ответили');
+  } else if (hp.cur?.buds) {
+    // Buds не присылают ответ — значит, применилось как просили
+  } else {
+    if (r.anc) { sony.state = { ...sony.state, ...r.anc, ok: true }; store.set('sony', sony.state); }
+    headset.extra = { ...headset.extra };
+    for (const k of ['eq', 'pause', 'stc', 'apo']) if (k in r) headset.extra[k] = r[k];
+    store.set('sonyExtra', headset.extra);
+  }
+  sony.render?.();
+  buds.render?.();
+};
+
+function headsetCmd(cmd) {
+  headset.busy = true;
+  sony.render?.();
+  buds.render?.();
+  NATIVE.headset(JSON.stringify(cmd));
+}
+
+// Эквалайзер и переключатели для карточки Sony
+function sonyExtraParts() {
+  const x = headset.extra;
+  if (!x) {
+    return [el('button', { class: 'btn-ghost', type: 'button', disabled: headset.busy, onclick: () => headsetCmd({ op: 'read' }) },
+      headset.busy ? 'Читаю настройки…' : 'Эквалайзер и настройки')];
+  }
+  const parts = [];
+  if (x.eq) {
+    const eq = el('div', { class: 'tabs' });
+    for (const [code, label] of SONY_EQ) {
+      eq.append(el('button', {
+        class: 'tab' + (x.eq.preset === code ? ' active' : ''), type: 'button', disabled: headset.busy,
+        onclick: () => {
+          x.eq.preset = code;
+          headsetCmd(code === 0xa0 ? { op: 'eq', bands: x.eq.bands } : { op: 'eq', preset: code });
+        },
+      }, label));
+    }
+    parts.push(el('p', { style: 'margin-top:14px' }, 'Эквалайзер'), eq);
+    if (x.eq.preset === 0xa0 && x.eq.bands?.length) {
+      const names = x.eq.bands.length === SONY_BANDS.length ? SONY_BANDS : x.eq.bands.map((_, i) => `Полоса ${i + 1}`);
+      x.eq.bands.forEach((v, i) => {
+        const val = el('span', { class: 'band-val' }, (v > 0 ? '+' : '') + v);
+        const range = el('input', { type: 'range', class: 'range', min: -10, max: 10, step: 1, value: v });
+        range.addEventListener('input', () => { val.textContent = (range.value > 0 ? '+' : '') + range.value; });
+        range.addEventListener('change', () => {
+          x.eq.bands[i] = Number(range.value);
+          headsetCmd({ op: 'eq', bands: x.eq.bands });
+        });
+        parts.push(el('div', { class: 'band' }, el('span', {}, names[i]), val), range);
+      });
+    }
+  }
+  const flag = (key, label) => {
+    if (key in x) parts.push(switchRow(label, !!x[key], (on) => { x[key] = on; headsetCmd({ op: key, on }); }));
+  };
+  flag('pause', 'Пауза, когда снимаешь наушники');
+  flag('stc', 'Speak-to-Chat: пауза, когда начинаешь говорить');
+  flag('apo', 'Выключаться, когда наушники сняты');
+  parts.push(el('button', { class: 'btn-ghost', type: 'button', disabled: headset.busy, onclick: () => headsetCmd({ op: 'read' }) },
+    headset.busy ? 'Связываюсь…' : 'Обновить из наушников'));
+  return parts;
+}
+
+/* Galaxy Buds: шумоподавление и эквалайзер. Наушники не сообщают текущий режим,
+   поэтому показываем последний выбранный в Aura. */
+const BUDS_MODES = [['nc', 'Шумодав'], ['ambient', 'Звуковой фон'], ['off', 'Выкл']];
+const BUDS_EQ = [[-1, 'Выкл'], [0, 'Басы'], [1, 'Мягкий'], [2, 'Динамичный'], [3, 'Чистый'], [4, 'Высокие']];
+const buds = { render: null };
+
+function budsCard() {
+  const card = el('div', { class: 'settings-card' });
+  const st = store.get('buds') || {};
+  buds.render = () => {
+    const chips = (list, key, op) => {
+      const wrap = el('div', { class: 'tabs' });
+      for (const [v, label] of list) {
+        wrap.append(el('button', {
+          class: 'tab' + (st[key] === v ? ' active' : ''), type: 'button', disabled: headset.busy,
+          onclick: () => {
+            st[key] = v;
+            store.set('buds', st);
+            headsetCmd(op === 'anc' ? { op, mode: v } : { op, preset: v });
+          },
+        }, label));
+      }
+      return wrap;
+    };
+    card.replaceChildren(
+      el('h3', {}, cleanDeviceName(hp.cur?.name) + (headset.busy ? ' · …' : '')),
+      el('p', {}, headset.busy ? 'Связываюсь с наушниками…' : 'Режим шума'),
+      chips(BUDS_MODES, 'mode', 'anc'),
+      el('p', { style: 'margin-top:14px' }, 'Эквалайзер'),
+      chips(BUDS_EQ, 'eq', 'eq'));
+  };
+  buds.render();
+  return card;
+}
+
+/* ---------- Обновления внутри Aura (только в приложении) ---------- */
+const upd = { info: null, pct: null, manual: false, hidden: false, render: null };
+
+window.auraUpdate = (r) => {
+  upd.info = r;
+  if (upd.manual) {
+    if (r.error) toast(r.error);
+    else if (!r.available) toast('У тебя последняя версия Aura');
+  }
+  upd.manual = false;
+  updateBanner();
+  upd.render?.();
+};
+
+window.auraUpdateProgress = (p) => {
+  upd.pct = p < 0 ? null : p;
+  if (p < 0) toast('Не удалось скачать обновление, попробуй ещё раз');
+  updateBanner();
+  upd.render?.();
+};
+
+function checkUpdate(manual) {
+  upd.manual = manual;
+  NATIVE.checkUpdate();
+}
+
+function startUpdate() {
+  if (!upd.info?.url || upd.pct != null) return;
+  if (!NATIVE.canInstall()) {
+    toast('Разреши Aura устанавливать приложения и нажми «Обновить» ещё раз');
+    NATIVE.openInstallSettings();
+    return;
+  }
+  upd.pct = 0;
+  updateBanner();
+  upd.render?.();
+  NATIVE.installUpdate(upd.info.url);
+}
+
+function updateLabel() {
+  if (upd.pct == null) return `Обновить до ${upd.info.version}`;
+  return upd.pct >= 100 ? 'Устанавливаю…' : `Скачиваю ${upd.pct}%`;
+}
+
+function updateBanner() {
+  let b = $('#updBanner');
+  const show = !!upd.info?.available && !upd.hidden && !!api;
+  if (!show) { b?.remove(); return; }
+  if (!b) {
+    b = el('div', { id: 'updBanner', class: 'upd-banner' },
+      el('button', { class: 'upd-main', type: 'button', onclick: startUpdate }),
+      el('button', { class: 'upd-close', type: 'button', 'aria-label': 'Скрыть', html: icon('close'), onclick: () => { upd.hidden = true; updateBanner(); } }));
+    document.body.append(b);
+  }
+  b.querySelector('.upd-main').textContent = upd.pct == null ? `Вышла Aura ${upd.info.version} — обновить` : updateLabel();
+}
+
+function updateCard() {
+  const card = el('div', { class: 'settings-card' });
+  upd.render = () => {
+    if (!card.isConnected && upd.info) { upd.render = null; return; }
+    const i = upd.info;
+    card.replaceChildren(
+      el('h3', {}, 'Обновления'),
+      el('p', {}, i?.current ? `Установлена Aura ${i.current}.` : 'Проверяю версию…'),
+      i?.available
+        ? el('button', { class: 'btn-primary', type: 'button', onclick: startUpdate, html: icon('download') + updateLabel() })
+        : el('button', { class: 'btn-ghost', type: 'button', onclick: () => checkUpdate(true) }, 'Проверить обновления'));
+  };
+  upd.render();
+  if (!upd.info) checkUpdate(false);
+  return card;
+}
+
+// Карточка в Now Bar через интернет — без доступа к уведомлениям
+function nowBarApiCard() {
+  return el('div', { class: 'settings-card' },
+    el('h3', {}, 'Aura в Now Bar и шторке'),
+    el('p', {}, 'Своя карточка с треком и кнопками: нажатие открывает Aura, а не Spotify. Пока играет музыка, Aura раз в 10 секунд спрашивает у Spotify, что играет, — поэтому смена трека появляется с небольшой задержкой, а батарея тратится чуть больше.'),
+    switchRow('Показывать карточку Aura', NATIVE.getNowBar(), (on) => NATIVE.setNowBar(on)),
+    el('p', { style: 'margin-top:12px' }, 'Чтобы карточек не было две, выключи у Spotify уведомления о воспроизведении. Музыка продолжит играть.'),
+    el('button', { class: 'btn-ghost', type: 'button', onclick: () => NATIVE.openSpotifyNotifications() }, 'Уведомления Spotify'));
 }
 
 /* ---------- Карточка Aura в Now Bar (только в приложении) ---------- */
@@ -1707,6 +1903,7 @@ function devicesView(message) {
     render(body) {
       if (message) body.append(note(message));
       if (NATIVE && hp.cur?.sony) body.append(sonyCard());
+      else if (NATIVE && hp.cur?.buds) body.append(budsCard());
       const list = el('div', { class: 'list' });
       const extra = el('div');
       body.append(list, extra);
@@ -1804,9 +2001,11 @@ function settingsView() {
               NATIVE.openOverlaySettings();
             }
           })));
-        if (NATIVE.mediaSupported?.()) body.append(nowBarCard());
+        body.append(NATIVE.mediaSupported?.() ? nowBarCard() : nowBarApiCard());
         if (hp.cur?.sony) body.append(sonyCard());
+        else if (hp.cur?.buds) body.append(budsCard());
         body.append(alarmCard());
+        body.append(updateCard());
       }
 
       body.append(el('div', { class: 'settings-card' },
@@ -2629,7 +2828,14 @@ function startApp(a) {
   poll();
   updateViz();
   updateWakeLock();
-  if (NATIVE) { try { window.auraHeadphones(JSON.parse(NATIVE.headphones())); } catch {} }
+  if (NATIVE) {
+    try { window.auraHeadphones(JSON.parse(NATIVE.headphones())); } catch {}
+    // Проверяем обновления не чаще раза в 6 часов
+    if (!a.isDemo && Date.now() - store.get('updAt', 0) > 6 * 3600e3) {
+      store.set('updAt', Date.now());
+      setTimeout(() => checkUpdate(false), 4000);
+    } else updateBanner();
+  }
 }
 
 function showLogin(message) {
