@@ -124,6 +124,12 @@ class MainActivity : Activity() {
     private fun isOwnPage(uri: Uri): Boolean =
         uri.scheme == "https" && uri.host == HOST && (uri.path ?: "").startsWith(PATH)
 
+    // Защищённую музыку просит плеер Spotify (он живёт во встроенном окне sdk.scdn.co) или сама Aura
+    private fun mediaOriginOk(uri: Uri): Boolean {
+        val host = uri.host ?: return false
+        return uri.scheme == "https" && (host == HOST || host.endsWith("scdn.co") || host.endsWith("spotify.com"))
+    }
+
     private fun openExternal(url: String) {
         try {
             val intent = if (url.startsWith("intent:")) {
@@ -138,6 +144,11 @@ class MainActivity : Activity() {
     }
 
     private fun onMicRequest(request: PermissionRequest) {
+        // Защищённая музыка (Widevine) — без неё плеер Spotify внутри Aura не запустится
+        if (PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID in request.resources && mediaOriginOk(request.origin)) {
+            request.grant(arrayOf(PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID))
+            return
+        }
         if (PermissionRequest.RESOURCE_AUDIO_CAPTURE !in request.resources) {
             request.deny()
         } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -171,7 +182,8 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
-        web.onPause()
+        // Музыка играет в самой Aura — страницу не усыпляем, иначе звук остановится
+        if (!NowBar.localPlayback) web.onPause()
         AuraWidget.refreshAsync(this)
         super.onPause()
     }
@@ -253,6 +265,13 @@ class MainActivity : Activity() {
         fun nowPlaying(json: String) {
             AuraWidget.fromPage(this@MainActivity, json)
             NowBar.running?.let { runOnUiThread { it.poke() } }
+        }
+
+        /** Музыка заиграла / остановилась во встроенном плеере Aura. */
+        @JavascriptInterface
+        fun localPlayback(on: Boolean) = runOnUiThread {
+            NowBar.localPlayback = on
+            if (on) NowBar.start(this@MainActivity) else NowBar.running?.poke()
         }
 
         // Карточка Aura в Now Bar через интернет

@@ -56,6 +56,7 @@ class Spotify(private val ctx: Context) {
             .put("refresh_token", d.optString("refresh_token").ifEmpty { t.getString("refresh_token") })
             .put("expires_at", System.currentTimeMillis() + d.optLong("expires_in", 3600) * 1000)
             .put("v", t.opt("v"))
+            .put("scope", d.optString("scope").ifEmpty { t.optString("scope") })
         prefs.edit().putString(KEY_TOKEN, saved.toString()).apply()
         return saved.getString("access_token")
     }

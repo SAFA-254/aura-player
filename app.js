@@ -22,6 +22,10 @@ const CONFIG = {
     'user-read-recently-played',
     'playlist-modify-public',
     'playlist-modify-private',
+    // Для плеера внутри Aura (Web Playback SDK)
+    'streaming',
+    'user-read-email',
+    'user-read-private',
   ].join(' '),
   // Увеличивай, когда меняется список scopes — Aura попросит войти заново.
   scopesVersion: 2,
@@ -195,8 +199,9 @@ async function tokenRequest(params) {
 }
 
 // v — версия набора разрешений, с которыми входили (при обновлении токена она не меняется)
-function saveToken(d, v) {
-  const t = { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: Date.now() + d.expires_in * 1000, v };
+function saveToken(d, v, prevScope) {
+  // scope — какие разрешения дал вход (нужно знать, есть ли «streaming» для плеера Aura)
+  const t = { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: Date.now() + d.expires_in * 1000, v, scope: d.scope || prevScope };
   store.set('token', t);
   return t;
 }
@@ -262,7 +267,7 @@ const Auth = {
       this._refreshing = tokenRequest({ grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: this.clientId() })
         .then((d) => {
           if (!d.refresh_token) d.refresh_token = t.refresh_token;
-          return saveToken(d, t.v);
+          return saveToken(d, t.v, t.scope);
         })
         .catch((e) => {
           if (e.code === 'invalid_grant') store.del('token');
@@ -874,6 +879,152 @@ function setOverlay(kind, s) {
   $('#btnOpenLibrary').hidden = asleep;
 }
 
+/* ---------- Плеер внутри Aura (официальный Spotify Web Playback SDK) ----------
+   Aura становится отдельным устройством Spotify «Aura» и играет звук сама —
+   приложение Spotify для этого не нужно. Официально Spotify поддерживает SDK только
+   на компьютерах, поэтому на телефоне это эксперимент. */
+const local = { player: null, deviceId: null, status: 'off', error: '', playing: false, waiters: [], render: null };
+
+function hasStreamingScope() {
+  const t = store.get('token');
+  return !t?.scope || t.scope.split(' ').includes('streaming');
+}
+
+function localStatusText() {
+  switch (local.status) {
+    case 'loading': return 'Запускаю плеер…';
+    case 'ready': return local.playing ? 'Музыка играет прямо в Aura.' : 'Плеер готов: в списке устройств Spotify есть «Aura».';
+    case 'error': return 'Не запустился: ' + local.error;
+    case 'offline': return 'Плеер отключился, переподключаюсь…';
+    default: return 'Выключено.';
+  }
+}
+
+function setLocalStatus(status, error = '') {
+  local.status = status;
+  local.error = error;
+  if (status === 'ready' || status === 'error') local.waiters.splice(0).forEach((f) => f(status === 'ready' ? local.deviceId : null));
+  local.render?.();
+}
+
+function loadLocalPlayer() {
+  if (!api || api.isDemo || local.player || local.status === 'loading') return;
+  if (!hasStreamingScope()) { setLocalStatus('error', 'нужно войти заново, чтобы разрешить воспроизведение'); return; }
+  setLocalStatus('loading');
+  window.onSpotifyWebPlaybackSDKReady = initLocalPlayer;
+  if (window.Spotify?.Player) { initLocalPlayer(); return; }
+  const sc = document.createElement('script');
+  sc.src = 'https://sdk.scdn.co/spotify-player.js';
+  sc.onerror = () => setLocalStatus('error', 'не удалось загрузить плеер Spotify');
+  document.head.append(sc);
+}
+
+function initLocalPlayer() {
+  if (local.player) return;
+  const p = new window.Spotify.Player({
+    name: 'Aura',
+    getOAuthToken: (cb) => { Auth.accessToken().then((t) => t && cb(t)); },
+    volume: 1,
+  });
+  p.addListener('ready', ({ device_id }) => { local.deviceId = device_id; setLocalStatus('ready'); });
+  p.addListener('not_ready', () => { local.deviceId = null; setLocalStatus('offline'); });
+  const errors = {
+    initialization_error: 'этот браузер не поддерживает плеер Spotify',
+    authentication_error: 'нужно войти заново',
+    account_error: 'нужен Spotify Premium',
+    playback_error: 'ошибка воспроизведения',
+  };
+  for (const [ev, text] of Object.entries(errors)) {
+    p.addListener(ev, ({ message }) => {
+      console.warn(ev, message);
+      if (ev === 'playback_error' && local.status === 'ready') { toast('Плеер Aura: ' + text); return; }
+      setLocalStatus('error', `${text} (${message})`);
+    });
+  }
+  p.addListener('player_state_changed', (st) => {
+    const playing = !!st && !st.paused;
+    if (playing !== local.playing) {
+      local.playing = playing;
+      NATIVE?.localPlayback?.(playing);
+      local.render?.();
+    }
+    if (api) schedulePoll(400);
+  });
+  local.player = p;
+  p.connect().then((ok) => { if (!ok) setLocalStatus('error', 'плеер не смог подключиться к Spotify'); });
+}
+
+function stopLocalPlayer() {
+  local.player?.disconnect();
+  local.player = null;
+  local.deviceId = null;
+  if (local.playing) NATIVE?.localPlayback?.(false);
+  local.playing = false;
+  setLocalStatus('off');
+}
+
+// device_id плеера Aura, когда он готов (или null через timeout)
+function localReady(ms = 10000) {
+  if (local.status === 'ready' && local.deviceId) return Promise.resolve(local.deviceId);
+  if (local.status === 'error') return Promise.resolve(null);
+  loadLocalPlayer();
+  return new Promise((resolve) => {
+    local.waiters.push(resolve);
+    setTimeout(() => { const i = local.waiters.indexOf(resolve); if (i >= 0) { local.waiters.splice(i, 1); resolve(null); } }, ms);
+  });
+}
+
+// Включить музыку прямо в Aura: перенести воспроизведение на устройство «Aura»
+async function playHere(opts = {}) {
+  if (!api) return false;
+  local.player?.activateElement?.(); // браузеры на компьютере пускают звук только после нажатия
+  ui.seq++;
+  const id = await localReady();
+  if (!api) return false;
+  if (!id) {
+    toast('Плеер Aura не запустился' + (local.error ? ': ' + local.error : ''));
+    return false;
+  }
+  try {
+    if (Object.keys(opts).length) await api.play(opts, id);
+    else await api.transfer(id, true);
+  } catch (e) {
+    handleError(e, false);
+    return false;
+  } finally {
+    schedulePoll(800);
+  }
+  return true;
+}
+
+function localCard() {
+  const card = el('div', { class: 'settings-card' });
+  local.render = () => {
+    const parts = [
+      el('h3', {}, 'Играть музыку в Aura · эксперимент'),
+      el('p', {}, 'Aura сама играет звук как отдельное устройство Spotify — приложение Spotify не нужно. Официально Spotify поддерживает это только на компьютерах, на телефоне может не заработать.'),
+      switchRow('Играть в Aura', settings.playInAura, (on) => {
+        settings.playInAura = on;
+        saveSettings();
+        if (on) loadLocalPlayer(); else stopLocalPlayer();
+      }),
+    ];
+    if (settings.playInAura) {
+      parts.push(el('p', { style: 'margin-top:10px' }, localStatusText()));
+      if (!hasStreamingScope() || /войти заново/.test(local.error)) {
+        parts.push(el('button', { class: 'btn-primary', type: 'button', onclick: () => { Auth.logout(); Auth.login(); } }, 'Войти заново'));
+      } else if (local.status === 'ready' && !local.playing) {
+        parts.push(el('button', { class: 'btn-primary', type: 'button', onclick: () => playHere() }, 'Переключить музыку в Aura'));
+      } else if (local.status === 'error') {
+        parts.push(el('button', { class: 'btn-ghost', type: 'button', onclick: () => { stopLocalPlayer(); loadLocalPlayer(); } }, 'Попробовать снова'));
+      }
+    }
+    card.replaceChildren(...parts);
+  };
+  local.render();
+  return card;
+}
+
 /* ---------- Запуск Spotify из Aura (только в приложении) ---------- */
 const waker = { busy: false, waiters: [] };
 
@@ -893,6 +1044,7 @@ function wakePhone() {
 }
 
 async function wakeAndPlay(opts = {}) {
+  if (settings.playInAura && api && !api.isDemo) return playHere(opts);
   if (!NATIVE || !api) return false;
   ui.seq++;
   ui.autoWoke = true;
@@ -1502,7 +1654,7 @@ async function playOn(opts = {}) {
       if (e.status !== 404) throw e;
       const devs = await api.devices();
       const target = devs.find((d) => d.is_active) || devs.find((d) => d.type === 'Smartphone') || devs[0];
-      if (!target && NATIVE) return await wakeAndPlay(opts);
+      if (!target && (NATIVE || settings.playInAura)) return await wakeAndPlay(opts);
       if (!target) {
         openDevices('Spotify сейчас нигде не открыт. Запусти приложение Spotify на телефоне и попробуй снова.');
         return false;
@@ -1529,7 +1681,7 @@ function handleError(e, fromPoll) {
     return;
   }
   if (e.status === 404) {
-    if (!fromPoll && NATIVE) wakeAndPlay();
+    if (!fromPoll && (NATIVE || settings.playInAura)) wakeAndPlay();
     else if (!fromPoll) openDevices('Выбери, где играть музыку');
     return;
   }
@@ -1557,7 +1709,7 @@ function togglePlay() {
   const pb = ui.pb;
   if (!pb) { playOn({}); return; }
   // Устройство есть, а трека нет — Spotify уснул, команды до него не доходят: будим
-  if (NATIVE && !pb.item && pb.currently_playing_type !== 'ad') { wakeAndPlay(); return; }
+  if ((NATIVE || settings.playInAura) && !pb.item && pb.currently_playing_type !== 'ad') { wakeAndPlay(); return; }
   const playing = pb.is_playing;
   command(() => (playing ? api.pause() : api.play()), (s) => { s.is_playing = !playing; });
 }
@@ -1980,6 +2132,7 @@ function settingsView() {
           updateViz();
         })));
 
+      if (!api.isDemo) body.append(localCard());
       if (NATIVE) {
         body.append(el('div', { class: 'settings-card' },
           el('h3', {}, 'Spotify'),
@@ -2576,7 +2729,7 @@ function drawViz(now) {
 /* =====================================================================
    Внешний вид, экран
    ===================================================================== */
-const settings = Object.assign({ theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true }, store.get('settings', {}));
+const settings = Object.assign({ theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true, playInAura: false }, store.get('settings', {}));
 function saveSettings() { store.set('settings', settings); }
 function applyLook() {
   document.body.dataset.theme = settings.theme;
@@ -2828,6 +2981,7 @@ function startApp(a) {
   poll();
   updateViz();
   updateWakeLock();
+  if (settings.playInAura && !a.isDemo) loadLocalPlayer();
   if (NATIVE) {
     try { window.auraHeadphones(JSON.parse(NATIVE.headphones())); } catch {}
     // Проверяем обновления не чаще раза в 6 часов
@@ -2840,6 +2994,8 @@ function startApp(a) {
 
 function showLogin(message) {
   api = null;
+  stopLocalPlayer();
+  updateBanner();
   clearTimeout(ui.timer);
   cancelAnimationFrame(ui.raf);
   closeSheet();

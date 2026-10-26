@@ -18,6 +18,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -41,6 +42,19 @@ class NowBar : Service() {
     private var idleSince = 0L
 
     private val tick = Runnable { poll() }
+    private var wake: PowerManager.WakeLock? = null
+
+    // Пока музыка играет в самой Aura, не даём процессору уснуть
+    private fun holdWake(on: Boolean) {
+        if (on && wake == null) {
+            wake = getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aura:playback")
+                .apply { setReferenceCounted(false); acquire(3 * 60 * 60_000L) }
+        } else if (!on) {
+            wake?.takeIf { it.isHeld }?.release()
+            wake = null
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -86,6 +100,7 @@ class NowBar : Service() {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
+        holdWake(false)
         session.isActive = false
         session.release()
         if (running === this) running = null
@@ -121,7 +136,8 @@ class NowBar : Service() {
                 apply()
                 val playing = st?.optBoolean("is_playing") == true
                 if (playing) idleSince = 0 else if (idleSince == 0L) idleSince = SystemClock.elapsedRealtime()
-                if (!enabled(this) || (idleSince > 0 && SystemClock.elapsedRealtime() - idleSince > IDLE_MS)) {
+                holdWake(localPlayback)
+                if ((!enabled(this) && !localPlayback) || (idleSince > 0 && SystemClock.elapsedRealtime() - idleSince > IDLE_MS)) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
                     return@post
@@ -233,6 +249,10 @@ class NowBar : Service() {
         @Volatile
         var running: NowBar? = null
 
+        /** Музыка играет во встроенном плеере Aura — служба нужна, даже если карточка выключена. */
+        @Volatile
+        var localPlayback = false
+
         private fun prefs(ctx: Context) = ctx.getSharedPreferences("aura", Context.MODE_PRIVATE)
 
         fun enabled(ctx: Context): Boolean = prefs(ctx).getBoolean("nowbar", false)
@@ -244,7 +264,7 @@ class NowBar : Service() {
 
         /** Запустить (можно только пока Aura на экране) или подтолкнуть уже работающую. */
         fun start(ctx: Context) {
-            if (!enabled(ctx) || !Spotify(ctx).loggedIn()) return
+            if ((!enabled(ctx) && !localPlayback) || !Spotify(ctx).loggedIn()) return
             running?.let { it.poke(); return }
             try { ctx.startForegroundService(Intent(ctx, NowBar::class.java)) } catch (_: Exception) {}
         }
