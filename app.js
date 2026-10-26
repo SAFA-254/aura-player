@@ -1056,13 +1056,21 @@ const sony = { state: null, busy: false, render: null };
 
 window.auraSony = (r) => {
   sony.busy = false;
-  if (r.ok) sony.state = r;
-  else toast(r.error || 'Наушники не ответили');
+  if (r.ok) {
+    sony.state = r;
+    store.set('sony', r);
+  } else {
+    sony.state = sony.before;
+    toast(r.error || 'Наушники не ответили');
+  }
   sony.render?.();
 };
 
+// Кнопку подсвечиваем сразу, не дожидаясь наушников; при ошибке вернём как было
 function sonyAsk(mode = '', level = 0, voice = '') {
   sony.busy = true;
+  sony.before = sony.state;
+  if (mode) sony.state = { ...sony.state, mode, ...(level ? { level } : {}), ...(voice ? { voice: voice === '1' } : {}) };
   sony.render?.();
   NATIVE.sony(mode, level, voice);
 }
@@ -1080,7 +1088,7 @@ function sonyCard() {
     }
     const parts = [
       el('h3', {}, cleanDeviceName(hp.cur?.name) + (sony.busy ? ' · …' : '')),
-      el('p', {}, st ? 'Режим шума' : sony.busy ? 'Связываюсь с наушниками…' : 'Нажми режим, чтобы переключить'),
+      el('p', {}, sony.busy ? 'Связываюсь с наушниками…' : 'Режим шума'),
       modes,
     ];
     if (st?.mode === 'ambient') {
@@ -1091,8 +1099,10 @@ function sonyCard() {
     }
     card.replaceChildren(...parts);
   };
+  // Сами не подключаемся: каждое подключение отбирает наушники у Sony Sound Connect.
+  // Показываем последний известный режим, а к наушникам идём только по нажатию.
+  if (!sony.state) sony.state = store.get('sony');
   sony.render();
-  if (!sony.busy) sonyAsk();
   return card;
 }
 

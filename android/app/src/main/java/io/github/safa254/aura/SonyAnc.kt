@@ -9,7 +9,9 @@ import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
@@ -37,15 +39,48 @@ object SonyAnc {
      * Читает (mode == null) или меняет режим: "nc" — шумоподавление, "ambient" — звуковой фон,
      * "off" — выключено. level — сила звукового фона 1…20. Блокирующий вызов.
      */
-    fun run(dev: BluetoothDevice, mode: String?, level: Int?, voice: Boolean?): JSONObject = try {
-        Session(dev).use { s ->
-            s.init()
-            var cur = s.get()
-            if (mode != null) cur = s.set(cur, mode, level, voice)
-            state(cur).put("ok", true)
+    @Synchronized
+    fun run(dev: BluetoothDevice, mode: String?, level: Int?, voice: Boolean?): JSONObject {
+        closing?.cancel(false)
+        return try {
+            val reused = session?.takeIf { it.address == dev.address && it.alive } != null
+            try {
+                attempt(dev, mode, level, voice)
+            } catch (e: Exception) {
+                drop()
+                // Старое соединение могло тихо оборваться — пробуем один раз заново
+                if (!reused) throw e
+                attempt(dev, mode, level, voice)
+            }
+        } catch (e: Exception) {
+            drop()
+            JSONObject().put("ok", false).put("error", e.message ?: "Наушники не ответили")
+        } finally {
+            // Наушники держат только одно управляющее соединение, а Sound Connect тоже хочет его —
+            // поэтому через 20 секунд без нажатий отпускаем
+            closing = timer.schedule(Runnable { synchronized(SonyAnc) { drop() } }, IDLE_SEC, TimeUnit.SECONDS)
         }
-    } catch (e: Exception) {
-        JSONObject().put("ok", false).put("error", e.message ?: "Наушники не ответили")
+    }
+
+    private const val IDLE_SEC = 20L
+    private val timer = Executors.newSingleThreadScheduledExecutor()
+    private var closing: ScheduledFuture<*>? = null
+    private var session: Session? = null
+    private var last: ByteArray? = null
+
+    private fun attempt(dev: BluetoothDevice, mode: String?, level: Int?, voice: Boolean?): JSONObject {
+        val s = session?.takeIf { it.address == dev.address && it.alive }
+            ?: Session(dev).also { it.init(); session = it; last = null }
+        var cur = if (mode == null) s.get() else last ?: s.get()
+        if (mode != null) cur = s.set(cur, mode, level, voice)
+        last = cur
+        return state(cur).put("ok", true)
+    }
+
+    private fun drop() {
+        session?.close()
+        session = null
+        last = null
     }
 
     private fun state(p: ByteArray): JSONObject {
@@ -63,6 +98,8 @@ object SonyAnc {
     private class Msg(val type: Int, val seq: Int, val payload: ByteArray)
 
     private class Session(dev: BluetoothDevice) : Closeable {
+        val address: String = dev.address
+        @Volatile var alive = true
         private val socket: BluetoothSocket
         private val acks = LinkedBlockingQueue<Msg>()
         private val commands = LinkedBlockingQueue<Msg>()
@@ -89,6 +126,7 @@ object SonyAnc {
 
         fun get(): ByteArray {
             for (kind in intArrayOf(0x15, 0x17)) {
+                commands.clear()
                 send(byteArrayOf(GET.toByte(), kind.toByte()))
                 await { it[0].toInt() == RET && it.size >= 7 }?.let { return it }
             }
@@ -106,9 +144,10 @@ object SonyAnc {
             val i = if (wind) 6 else 5
             if (voice != null) p[i] = if (voice) 1 else 0
             if (level != null) p[i + 1] = level.coerceIn(1, 20).toByte()
+            commands.clear()
             send(p)
             // Наушники присылают новое состояние; если нет — считаем, что применилось как просили
-            return await(1500) { it[0].toInt() == NOTIFY || it[0].toInt() == RET }?.takeIf { it.size >= 7 }
+            return await(800) { it[0].toInt() == NOTIFY || it[0].toInt() == RET }?.takeIf { it.size >= 7 }
                 ?: p.also { it[0] = RET.toByte() }
         }
 
@@ -141,7 +180,7 @@ object SonyAnc {
             try {
                 while (true) {
                     val b = input.read()
-                    if (b < 0) return
+                    if (b < 0) break
                     if (b == 0x3e) buf.reset()
                     buf.write(b)
                     if (b != 0x3c) continue
@@ -154,10 +193,13 @@ object SonyAnc {
                     }
                 }
             } catch (_: IOException) {
+            } finally {
+                alive = false
             }
         }
 
         override fun close() {
+            alive = false
             try { socket.close() } catch (_: IOException) {}
         }
     }
