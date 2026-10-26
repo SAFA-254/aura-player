@@ -9,7 +9,7 @@
 /* ---------- Настройки ---------- */
 const CONFIG = {
   // Можно вписать сюда Client ID из Spotify Dashboard, тогда поле на экране входа не появится.
-  clientId: '',
+  clientId: '78df86d806e945d48c9c151febadaa98',
   scopes: [
     'user-read-playback-state',
     'user-modify-playback-state',
