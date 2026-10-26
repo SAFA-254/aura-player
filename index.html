@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#16121c" id="themeColor">
+  <meta name="description" content="Свой плеер для Spotify с фоном под цвет обложки">
+  <title>Aura Player</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Фон: размытая обложка + градиент из её цветов -->
+  <div id="bg" aria-hidden="true">
+    <div class="bg-layer" id="bgA"></div>
+    <div class="bg-layer" id="bgB"></div>
+    <div class="bg-tint"></div>
+    <div class="bg-grain"></div>
+  </div>
+
+  <!-- Экран входа -->
+  <section id="login" class="screen login" hidden>
+    <div class="login-inner">
+      <div class="logo" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <h1>Aura</h1>
+      <p class="lead">Твой Spotify в новом дизайне</p>
+
+      <div id="clientIdBox" class="field-box" hidden>
+        <label for="clientIdInput">Client ID из Spotify Dashboard</label>
+        <input id="clientIdInput" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="например 3f9a…c21">
+        <p class="hint">Redirect URI для настроек приложения в Spotify:</p>
+        <button class="copy-line" id="redirectCopy" type="button">
+          <code id="redirectUri"></code>
+          <span data-icon="copy"></span>
+        </button>
+      </div>
+
+      <button id="btnLogin" class="btn-primary" type="button">
+        <span data-icon="spotify"></span> Войти через Spotify
+      </button>
+      <button id="btnDemo" class="btn-ghost" type="button">Посмотреть демо</button>
+      <button id="btnInstallLogin" class="btn-ghost" type="button" hidden>
+        <span data-icon="download"></span> Установить приложение
+      </button>
+      <p class="fine">Нужен Spotify Premium. Музыку играет приложение Spotify, Aura управляет им.</p>
+    </div>
+  </section>
+
+  <!-- Плеер -->
+  <main id="player" class="screen player" hidden>
+    <header class="top">
+      <button class="icon-btn" id="btnLibrary" type="button" aria-label="Медиатека" data-icon="library"></button>
+      <div class="top-title">
+        <span class="eyebrow" id="contextType">Сейчас играет</span>
+        <span class="context-name" id="contextName">—</span>
+      </div>
+      <button class="icon-btn" id="btnMenu" type="button" aria-label="Настройки" data-icon="more"></button>
+    </header>
+
+    <div class="art-area">
+      <div class="art" id="art">
+        <img id="cover" alt="" draggable="false">
+        <div class="art-shine"></div>
+      </div>
+    </div>
+
+    <div class="meta">
+      <div class="titles">
+        <div class="marquee" id="trackNameWrap"><h1 id="trackName">—</h1></div>
+        <p id="artistName">—</p>
+      </div>
+      <button class="icon-btn like" id="btnLike" type="button" aria-label="Нравится" data-icon="heart"></button>
+    </div>
+
+    <div class="progress">
+      <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Перемотка">
+      <div class="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
+    </div>
+
+    <div class="controls">
+      <button class="icon-btn small" id="btnShuffle" type="button" aria-label="Перемешать" data-icon="shuffle"></button>
+      <button class="icon-btn mid" id="btnPrev" type="button" aria-label="Назад" data-icon="prev"></button>
+      <button class="play-btn" id="btnPlay" type="button" aria-label="Играть" data-icon="play"></button>
+      <button class="icon-btn mid" id="btnNext" type="button" aria-label="Вперёд" data-icon="next"></button>
+      <button class="icon-btn small" id="btnRepeat" type="button" aria-label="Повтор" data-icon="repeat"></button>
+    </div>
+
+    <footer class="bottom">
+      <button class="chip" id="btnDevices" type="button">
+        <span data-icon="speaker"></span><span id="deviceName">Устройство</span>
+      </button>
+      <div class="bottom-right">
+        <button class="icon-btn small" id="btnSearch" type="button" aria-label="Поиск" data-icon="search"></button>
+        <button class="icon-btn small" id="btnQueue" type="button" aria-label="Очередь" data-icon="queue"></button>
+      </div>
+    </footer>
+
+    <!-- Когда Spotify нигде не открыт -->
+    <div id="noDevice" class="no-device" hidden>
+      <div class="no-device-card">
+        <span class="nd-icon" data-icon="speaker"></span>
+        <h2>Ничего не играет</h2>
+        <p>Открой Spotify на телефоне или компьютере и включи любой трек — Aura сразу подхватит.</p>
+        <a class="btn-primary" href="spotify:" id="openSpotify"><span data-icon="spotify"></span> Открыть Spotify</a>
+        <button class="btn-ghost" id="btnPickDevice" type="button">Выбрать устройство</button>
+        <button class="btn-ghost" id="btnOpenLibrary" type="button">Включить из медиатеки</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Нижняя шторка -->
+  <div id="sheetBackdrop" class="sheet-backdrop" hidden></div>
+  <section id="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+    <div class="sheet-handle" id="sheetHandle"></div>
+    <header class="sheet-head">
+      <button class="icon-btn small" id="sheetBack" type="button" aria-label="Назад" data-icon="back" hidden></button>
+      <h2 id="sheetTitle"></h2>
+      <button class="icon-btn small" id="sheetClose" type="button" aria-label="Закрыть" data-icon="close"></button>
+    </header>
+    <div id="sheetBody" class="sheet-body"></div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
