@@ -125,6 +125,8 @@ object Alarm {
                     prefs(ctx).edit().putString("alarm", a.put("enabled", false).toString()).apply()
                 }
                 ctx.startForegroundService(Intent(ctx, Ring::class.java))
+                // Плеер Aura запускаем сразу: сразу после будильника Android это разрешает
+                if (NowBar.engineEnabled(ctx)) NowBar.start(ctx)
             }
             schedule(ctx)
             if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {

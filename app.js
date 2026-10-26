@@ -871,6 +871,7 @@ function setOverlay(kind, s) {
   $('#ndText').textContent = NATIVE
     ? (waker.busy ? 'Бужу Spotify на телефоне… Если не выйдет, Aura на секунду откроет его.'
       : asleep ? 'Телефон усыпил Spotify в фоне. Aura разбудит его — нажми «Включить музыку».'
+      : settings.playInAura ? 'Aura может включить музыку прямо у себя.'
       : 'Spotify на телефоне не запущен. Aura может включить его сама.')
     : asleep
     ? `Похоже, телефон усыпил Spotify в фоне («${s?.device?.name || 'устройство'}»). Открой Spotify — музыка пойдёт, и Aura сразу подхватит. Чтобы такого не было: Настройки → Приложения → Spotify → Батарея → «Без ограничений».`
@@ -909,13 +910,7 @@ function localLog(text) {
 document.addEventListener('visibilitychange', () => { if (settings.playInAura) localLog(document.hidden ? 'Aura свёрнута' : 'Aura открыта'); });
 window.addEventListener('offline', () => { if (settings.playInAura) localLog('пропал интернет'); });
 window.addEventListener('online', () => { if (settings.playInAura) localLog('интернет вернулся'); });
-// Пока играет музыка — отметка раз в 15 секунд: если отметки прервутся, значит страницу остановили
-setInterval(() => {
-  if (ENGINE || !local.player || !local.playing) return;
-  local.player.getCurrentState().then((st) => {
-    localLog(`жива · ${st ? (st.paused ? 'пауза' : 'играет') + ' ' + fmtTime(st.position) : 'плеер пуст'}`);
-  }).catch(() => localLog('жива · плеер не ответил'));
-}, 15000);
+
 
 function hasStreamingScope() {
   const t = store.get('token');
@@ -1667,7 +1662,8 @@ function alarmCard() {
 
   const card = el('div', { class: 'settings-card' },
     el('h3', {}, 'Будильник с музыкой'),
-    el('p', {}, 'Включит музыку в Spotify на этом телефоне и плавно прибавит громкость за минуту. Если Spotify не ответит — зазвенит обычный будильник.'),
+    el('p', {}, (settings.playInAura ? 'Включит музыку прямо в Aura' : 'Включит музыку в Spotify на этом телефоне') +
+      ' и плавно прибавит громкость за минуту. Если музыка не заиграет — зазвенит обычный будильник.'),
     switchRow('Включён', a.enabled, (on) => { a.enabled = on; save(); }),
     time, days,
     el('p', { style: 'margin-top:12px' }, 'Что играть'), pick,
@@ -2206,8 +2202,10 @@ function settingsView() {
       if (!api.isDemo) body.append(localCard());
       if (NATIVE) {
         body.append(el('div', { class: 'settings-card' },
-          el('h3', {}, 'Spotify'),
-          el('p', {}, 'Aura сама запускает Spotify на телефоне — открывать его заранее не нужно.'),
+          el('h3', {}, 'При открытии'),
+          el('p', {}, settings.playInAura
+            ? 'Если нигде ничего не играет, Aura сразу продолжит музыку у себя.'
+            : 'Aura сама запускает Spotify на телефоне — открывать его заранее не нужно.'),
           switchRow('Сразу включать музыку, если ничего не играет', settings.autoWake, (on) => { settings.autoWake = on; saveSettings(); })));
         const auto = JSON.parse(NATIVE.getAuto());
         const saveAuto = () => NATIVE.setAuto(JSON.stringify(auto));
@@ -2800,7 +2798,7 @@ function drawViz(now) {
 /* =====================================================================
    Внешний вид, экран
    ===================================================================== */
-const settings = Object.assign({ theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true, playInAura: false }, store.get('settings', {}));
+const settings = Object.assign({ theme: 'aura', viz: 'auto', wakeLock: false, autoWake: true, playInAura: !!window.AuraNative?.engineStart }, store.get('settings', {}));
 function saveSettings() { store.set('settings', settings); }
 function applyLook() {
   document.body.dataset.theme = settings.theme;

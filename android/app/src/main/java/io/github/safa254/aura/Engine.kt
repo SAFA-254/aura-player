@@ -205,12 +205,6 @@ object Engine {
             }
             emit("state")
         }
-
-        @JavascriptInterface
-        fun heartbeat(pos: Long) {
-            position = pos
-            AuraLog.add(app, "жива · играет ${pos / 60000}:${"%02d".format(pos / 1000 % 60)}")
-        }
     }
 }
 

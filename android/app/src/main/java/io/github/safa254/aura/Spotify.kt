@@ -2,6 +2,8 @@ package io.github.safa254.aura
 
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
 import org.json.JSONObject
@@ -109,7 +111,37 @@ class Spotify(private val ctx: Context) {
                 if (e.status != 404) throw e
             }
         }
-        playOnPhone(body, shuffle) ?: throw ApiException(404, "Spotify на телефоне не отвечает")
+        // Сначала свой плеер Aura, и только если его нет — приложение Spotify
+        playOnEngine(body, shuffle) ?: playOnPhone(body, shuffle)
+            ?: throw ApiException(404, "Spotify на телефоне не отвечает")
+    }
+
+    /**
+     * device_id плеера Aura (фоновая служба), запустив его при необходимости.
+     * Из фона Android разрешает запуск не всегда — тогда null.
+     */
+    fun engineDevice(timeoutMs: Long = 9000): String? {
+        if (!NowBar.engineEnabled(ctx)) return null
+        Engine.deviceId?.let { return it }
+        Handler(Looper.getMainLooper()).post { NowBar.start(ctx) }
+        val until = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < until) {
+            Thread.sleep(500)
+            Engine.deviceId?.let { return it }
+        }
+        return null
+    }
+
+    /** Включить музыку в плеере Aura и дождаться, что она заиграла. Возвращает device_id или null. */
+    fun playOnEngine(body: JSONObject?, shuffle: Boolean, timeoutMs: Long = 9000): String? {
+        val id = engineDevice(timeoutMs) ?: return null
+        tryPlay(id, body, shuffle)
+        val until = SystemClock.elapsedRealtime() + 6000
+        while (SystemClock.elapsedRealtime() < until) {
+            if (Engine.playing) return id
+            Thread.sleep(400)
+        }
+        return null
     }
 
     private fun withWake(action: () -> Unit) {
@@ -117,7 +149,7 @@ class Spotify(private val ctx: Context) {
             action()
         } catch (e: ApiException) {
             if (e.status != 404) throw e
-            wakePhone() ?: throw e
+            (playOnEngine(null, false) ?: wakePhone()) ?: throw e
             action()
         }
     }

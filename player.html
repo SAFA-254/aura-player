@@ -13,7 +13,6 @@
 <script>
 'use strict';
 const E = window.AuraEngine;
-const fmt = (ms) => Math.floor(ms / 60000) + ':' + String(Math.floor(ms / 1000) % 60).padStart(2, '0');
 
 window.onSpotifyWebPlaybackSDKReady = () => {
   const p = new window.Spotify.Player({
@@ -37,11 +36,6 @@ window.onSpotifyWebPlaybackSDKReady = () => {
   });
   window.player = p;
   p.connect().then((ok) => { if (!ok) E.fail('connect', 'плеер не смог подключиться к Spotify'); });
-
-  // Отметка раз в 15 секунд, пока играет музыка: по журналу видно, что страница жива
-  setInterval(() => {
-    p.getCurrentState().then((st) => { if (st && !st.paused) E.heartbeat(st.position); }).catch(() => {});
-  }, 15000);
 };
 </script>
 <script src="https://sdk.scdn.co/spotify-player.js" onerror="window.AuraEngine && AuraEngine.fail('load', '')"></script>
