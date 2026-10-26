@@ -348,3 +348,160 @@ svg { display: block; }
   .play-btn { width: 66px; height: 66px; }
   .bottom { margin-top: 10px; }
 }
+
+/* =====================================================================
+   v2: текст песни, визуализатор, темы, широкий экран
+   ===================================================================== */
+.context-name { max-width: 100%; text-align: center; }
+.context-name:active { opacity: 0.6; }
+#artistName { display: block; max-width: 100%; text-align: left; }
+#artistName:active { opacity: 0.6; }
+#trackNameWrap { cursor: pointer; }
+#btnAdd svg { width: 24px; height: 24px; }
+.meta { gap: 4px; }
+.titles { margin-right: 6px; }
+.clock { display: none; }
+.player { touch-action: none; }
+
+/* ---------- Текст песни ---------- */
+.lyrics {
+  position: relative; display: none; flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none;
+  touch-action: pan-y; overscroll-behavior: contain;
+  mask-image: linear-gradient(transparent 0, #000 14%, #000 78%, transparent 100%);
+  -webkit-mask-image: linear-gradient(transparent 0, #000 14%, #000 78%, transparent 100%);
+}
+.lyrics::-webkit-scrollbar { display: none; }
+.player.lyrics-mode .art-area { display: none; }
+.player.lyrics-mode .lyrics { display: block; }
+.player.lyrics-mode .viz { display: none; }
+.lyrics-inner { padding: 22dvh 5% 34dvh 2px; }
+.ly-line {
+  display: block; width: 100%; text-align: left; padding: 7px 0;
+  font-size: 27px; font-weight: 800; line-height: 1.28; letter-spacing: -0.015em;
+  color: rgba(255, 255, 255, 0.32);
+  transform-origin: left center;
+  transition: color 0.35s ease, transform 0.35s ease, filter 0.35s ease;
+  filter: blur(0.4px);
+}
+.ly-line.past { color: rgba(255, 255, 255, 0.5); }
+.ly-line.active { color: #fff; transform: scale(1.03); filter: none; }
+.ly-line.gap { font-size: 22px; letter-spacing: 0.3em; }
+.ly-plain { white-space: pre-line; font-size: 21px; font-weight: 700; line-height: 1.55; color: rgba(255, 255, 255, 0.85); }
+.ly-note { color: var(--text-2); font-size: 15px; text-align: center; padding: 12px; line-height: 1.5; }
+.ly-source { color: var(--text-3); font-size: 12px; padding-top: 28px; }
+#btnLyrics.on { color: var(--accent); }
+
+/* ---------- Визуализатор ---------- */
+.viz { width: 100%; height: 46px; margin-top: 4px; display: block; }
+
+/* ---------- Переключатели в настройках ---------- */
+.settings-card .tabs { padding: 10px 0 0; flex-wrap: wrap; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.switch-row span { color: var(--text-2); font-size: 14px; line-height: 1.4; }
+.switch { position: relative; width: 50px; height: 30px; flex: none; }
+.switch input { opacity: 0; width: 100%; height: 100%; margin: 0; position: absolute; inset: 0; cursor: pointer; z-index: 1; }
+.switch i { position: absolute; inset: 0; border-radius: 30px; background: var(--glass-strong); transition: background 0.2s ease; }
+.switch i::after { content: ''; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform 0.2s ease; }
+.switch input:checked + i { background: var(--accent); }
+.switch input:checked + i::after { transform: translateX(20px); }
+.inline-form { display: flex; gap: 8px; padding: 4px 8px 10px; }
+.inline-form .search-input { flex: 1; }
+.inline-form .btn-primary { width: auto; min-height: 46px; padding: 0 18px; font-size: 15px; }
+
+/* ---------- Статистика ---------- */
+.rank { width: 22px; flex: none; text-align: center; font-weight: 800; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* ---------- Тема «Винил» ---------- */
+body[data-theme="vinyl"] .art {
+  border-radius: 50%;
+  box-shadow: 0 30px 60px -18px rgba(0, 0, 0, 0.75), 0 0 0 7px #0d0b10, 0 0 0 8px rgba(255, 255, 255, 0.07);
+  animation: spin 9s linear infinite;
+  transition: box-shadow 0.6s ease;
+}
+body[data-theme="vinyl"] .art.paused { transform: none; animation-play-state: paused; }
+body[data-theme="vinyl"] .art.swipe-l, body[data-theme="vinyl"] .art.swipe-r { animation: spin 9s linear infinite; }
+body[data-theme="vinyl"] .art-shine {
+  background:
+    radial-gradient(circle, transparent 0 41%, rgba(0, 0, 0, 0.25) 41.5%, transparent 43%),
+    repeating-radial-gradient(circle, rgba(0, 0, 0, 0) 0 3px, rgba(0, 0, 0, 0.13) 3px 4px),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 45%, rgba(255, 255, 255, 0.08) 70%, transparent);
+}
+body[data-theme="vinyl"] .art-shine::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 9%; height: 9%; transform: translate(-50%, -50%);
+  border-radius: 50%; background: var(--bg2); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.25), inset 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+body[data-theme="vinyl"] .marquee h1 { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; letter-spacing: 0; }
+body[data-theme="vinyl"] .bg-tint {
+  background:
+    radial-gradient(120% 70% at 50% 0%, color-mix(in srgb, var(--bg1) 60%, #3a2412), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg1) 40%, #20140c) 0%, color-mix(in srgb, var(--bg2) 85%, #120a06) 80%);
+}
+
+/* ---------- Тема «Неон» ---------- */
+body[data-theme="neon"] .bg-layer.on { opacity: 0.3; }
+body[data-theme="neon"] .bg-tint {
+  background:
+    radial-gradient(70% 45% at 50% 28%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 70%),
+    linear-gradient(180deg, rgba(6, 5, 10, 0.55), #07060b 85%);
+}
+body[data-theme="neon"] .art {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 34px color-mix(in srgb, var(--accent) 65%, transparent), 0 0 110px -20px var(--accent);
+}
+body[data-theme="neon"] .art.paused { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 20px -6px var(--accent); }
+body[data-theme="neon"] .marquee h1 { text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 85%, transparent); }
+body[data-theme="neon"] .play-btn {
+  background: transparent; color: var(--accent);
+  box-shadow: inset 0 0 0 2.5px var(--accent), 0 0 28px color-mix(in srgb, var(--accent) 55%, transparent), inset 0 0 22px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+body[data-theme="neon"] #seek::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, var(--accent) var(--p), rgba(255, 255, 255, 0.14) var(--p));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+body[data-theme="neon"] #seek::-webkit-slider-thumb { background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+body[data-theme="neon"] .ly-line.active { color: var(--accent); text-shadow: 0 0 22px color-mix(in srgb, var(--accent) 70%, transparent); }
+body[data-theme="neon"] .chip { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* ---------- Тема «Минимализм» ---------- */
+body[data-theme="minimal"] .bg-layer, body[data-theme="minimal"] .bg-grain { display: none; }
+body[data-theme="minimal"] .bg-tint { background: linear-gradient(180deg, color-mix(in srgb, var(--bg1) 75%, #000) 0%, var(--bg2) 100%); }
+body[data-theme="minimal"] .art { border-radius: 6px; box-shadow: 0 20px 40px -24px rgba(0, 0, 0, 0.6); }
+body[data-theme="minimal"] .art.paused { transform: scale(0.94); }
+body[data-theme="minimal"] .art-shine { display: none; }
+body[data-theme="minimal"] .marquee h1 { font-weight: 700; letter-spacing: -0.01em; }
+body[data-theme="minimal"] .play-btn { box-shadow: none; width: 68px; height: 68px; }
+body[data-theme="minimal"] .chip { background: transparent; border-color: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; padding-left: 0; }
+body[data-theme="minimal"] .eyebrow { letter-spacing: 0.06em; }
+
+/* ---------- Широкий экран: ПК, планшет, телевизор ---------- */
+@media (min-width: 900px) and (orientation: landscape) {
+  .screen.player {
+    max-width: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto auto auto auto auto;
+    grid-template-areas:
+      "top top"
+      "art lyrics"
+      "art viz"
+      "art meta"
+      "art progress"
+      "art controls"
+      "art bottom";
+    column-gap: 6vw;
+    padding: 20px 5vw 28px;
+  }
+  .top { grid-area: top; }
+  .art-area, .player.lyrics-mode .art-area { grid-area: art; display: grid; padding: 10px 0; }
+  .art { width: min(100%, 74dvh); }
+  .lyrics, .player.lyrics-mode .lyrics { grid-area: lyrics; display: block; }
+  .lyrics-inner { padding: 10dvh 2px 18dvh; }
+  .viz, .player.lyrics-mode .viz { grid-area: viz; display: block; }
+  .viz[hidden] { display: none !important; }
+  .meta { grid-area: meta; }
+  .progress { grid-area: progress; }
+  .controls { grid-area: controls; }
+  .bottom { grid-area: bottom; }
+  #btnLyrics { display: none; }
+  .clock { display: block; font-size: 22px; font-weight: 800; letter-spacing: 0.04em; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .ly-line { font-size: clamp(26px, 2.4vw, 40px); }
+}

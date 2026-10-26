@@ -18,7 +18,13 @@ const CONFIG = {
     'playlist-read-collaborative',
     'user-library-read',
     'user-library-modify',
+    'user-top-read',
+    'user-read-recently-played',
+    'playlist-modify-public',
+    'playlist-modify-private',
   ].join(' '),
+  // Увеличивай, когда меняется список scopes — Aura попросит войти заново.
+  scopesVersion: 2,
   pollMs: 3000,
 };
 const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
@@ -116,6 +122,13 @@ const ICONS = {
   music: ['s', '<path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>'],
   refresh: ['s', '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>'],
   logout: ['s', '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>'],
+  plus: ['s', '<path d="M12 5v14M5 12h14"/>'],
+  lyrics: ['s', '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 8.5h8M8 12.5h5"/>'],
+  share: ['s', '<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>'],
+  user: ['s', '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'],
+  disc: ['s', '<circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="2.5"/>'],
+  stats: ['s', '<path d="M6 20V11M12 20V4M18 20v-6"/>'],
+  expand: ['s', '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>'],
   spotify: ['f', '<path fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.6 14.4a.7.7 0 0 1-.96.24c-2.6-1.6-5.9-1.96-9.8-1.07a.7.7 0 1 1-.31-1.36c4.24-.97 7.9-.55 10.83 1.23.33.2.44.63.24.96zm1.2-2.7a.87.87 0 0 1-1.2.29c-3-1.84-7.55-2.37-11.08-1.3a.87.87 0 0 1-.5-1.67c4.04-1.22 9.06-.63 12.5 1.48.4.25.53.79.28 1.2zm.1-2.8C14.3 8.76 8.37 8.56 4.94 9.6a1.05 1.05 0 1 1-.6-2c3.94-1.2 10.5-.97 14.64 1.49a1.05 1.05 0 0 1-1.07 1.8z"/>'],
 };
 
@@ -160,8 +173,9 @@ async function tokenRequest(params) {
   return data;
 }
 
-function saveToken(d) {
-  const t = { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: Date.now() + d.expires_in * 1000 };
+// v — версия набора разрешений, с которыми входили (при обновлении токена она не меняется)
+function saveToken(d, v) {
+  const t = { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: Date.now() + d.expires_in * 1000, v };
   store.set('token', t);
   return t;
 }
@@ -204,7 +218,7 @@ const Auth = {
       code_verifier: pkce.verifier,
       client_id: this.clientId(),
     });
-    saveToken(data);
+    saveToken(data, CONFIG.scopesVersion);
     return true;
   },
 
@@ -223,7 +237,7 @@ const Auth = {
       this._refreshing = tokenRequest({ grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: this.clientId() })
         .then((d) => {
           if (!d.refresh_token) d.refresh_token = t.refresh_token;
-          return saveToken(d);
+          return saveToken(d, t.v);
         })
         .catch((e) => {
           if (e.code === 'invalid_grant') store.del('token');
@@ -303,6 +317,14 @@ class SpotifyApi {
   isSaved(uri) { return this.req('GET', '/me/library/contains', { query: { uris: uri } }); }
   save(uri) { return this.req('PUT', '/me/library', { query: { uris: uri } }); }
   unsave(uri) { return this.req('DELETE', '/me/library', { query: { uris: uri } }); }
+  topItems(type, range, offset = 0) { return this.req('GET', '/me/top/' + type, { query: { time_range: range, limit: 50, offset } }); }
+  recentlyPlayed() { return this.req('GET', '/me/player/recently-played', { query: { limit: 50 } }); }
+  artist(id) { return this.req('GET', '/artists/' + id); }
+  artistAlbums(id, offset = 0) { return this.req('GET', `/artists/${id}/albums`, { query: { include_groups: 'album,single', limit: 20, offset } }); }
+  album(id) { return this.req('GET', '/albums/' + id); }
+  albumTracks(id, offset = 0) { return this.req('GET', `/albums/${id}/tracks`, { query: { limit: 50, offset } }); }
+  createPlaylist(name) { return this.req('POST', '/me/playlists', { body: { name, public: false, description: 'Создан в Aura' } }); }
+  addToPlaylist(id, uris) { return this.req('POST', `/playlists/${id}/items`, { body: { uris } }); }
 }
 
 /* =====================================================================
@@ -392,12 +414,16 @@ class DemoApi {
       uri: 'spotify:track:demo' + i,
       name,
       duration_ms: dur,
-      artists: [{ name: artist }],
-      album: { name: album, images: [{ url: demoCover(album, artist, colors, i), width: 480, height: 480 }] },
+      artists: [{ name: artist, id: 'art' + i, uri: 'spotify:artist:art' + i }],
+      album: {
+        id: 'alb' + i, uri: 'spotify:album:alb' + i, name: album, album_type: i % 3 ? 'album' : 'single', release_date: String(2019 + i),
+        artists: [{ name: artist, id: 'art' + i }],
+        images: [{ url: demoCover(album, artist, colors, i), width: 480, height: 480 }],
+      },
     }));
     const t = this.tracks;
     const pl = (id, name, list, owner = 'Spotify') => ({
-      id, uri: 'spotify:playlist:' + id, name, owner: { display_name: owner },
+      id, uri: 'spotify:playlist:' + id, name, owner: { display_name: owner, id: owner === 'Ты' ? 'demo' : 'spotify' },
       images: t[list[0]].album.images, items: { total: list.length }, _tracks: list.map((i) => t[i]),
     });
     this.lists = [
@@ -436,7 +462,7 @@ class DemoApi {
   }
   _jump(i) { this.idx = (i + this.list.length) % this.list.length; this.posBase = 0; this.t0 = Date.now(); }
 
-  async me() { return { display_name: 'Демо-пользователь' }; }
+  async me() { return { id: 'demo', display_name: 'Демо-пользователь' }; }
   async playerState() {
     await this._lag();
     const p = this._pos();
@@ -455,9 +481,13 @@ class DemoApi {
   async play(opts = {}) {
     await this._lag();
     if (opts.context_uri) {
+      const [, type, id] = opts.context_uri.split(':');
       const found = this.lists.find((l) => l.uri === opts.context_uri);
-      this.list = found ? found._tracks : this.tracks;
-      this.ctx = { type: found ? 'playlist' : 'album', uri: opts.context_uri };
+      if (type === 'album') this.list = this.tracks.filter((x) => x.album.id === id);
+      else if (type === 'artist') this.list = this.tracks.filter((x) => x.artists[0].id === id);
+      else this.list = found ? found._tracks : this.tracks;
+      if (!this.list.length) this.list = this.tracks;
+      this.ctx = { type, uri: opts.context_uri };
       this._jump(opts.offset?.position || 0);
     } else if (opts.uris) {
       this.list = opts.uris.map((u) => this.tracks.find((t) => t.uri === u)).filter(Boolean);
@@ -508,6 +538,56 @@ class DemoApi {
   async isSaved(uri) { return [this.saved.has(uri)]; }
   async save(uri) { await this._lag(); this.saved.add(uri); }
   async unsave(uri) { await this._lag(); this.saved.delete(uri); }
+
+  _artists() {
+    return this.tracks.map((x) => ({ ...x.artists[0], images: x.album.images, genres: ['инди', 'поп'], type: 'artist' }));
+  }
+  async topItems(type, range) {
+    await this._lag();
+    const shift = { short_term: 0, medium_term: 3, long_term: 5 }[range] || 0;
+    const rot = (arr) => arr.slice(shift).concat(arr.slice(0, shift));
+    return { items: type === 'artists' ? rot(this._artists()) : rot(this.tracks), next: null };
+  }
+  async recentlyPlayed() {
+    await this._lag();
+    const now = Date.now();
+    return { items: this.tracks.map((x, i) => ({ track: x, played_at: new Date(now - (i * 37 + 3) * 60000).toISOString() })) };
+  }
+  async artist(id) { await this._lag(); return this._artists().find((a) => a.id === id); }
+  async artistAlbums(id) { await this._lag(); return { items: this.tracks.filter((x) => x.artists[0].id === id).map((x) => x.album), next: null }; }
+  async album(id) {
+    await this._lag();
+    const tr = this.tracks.filter((x) => x.album.id === id);
+    return { ...tr[0].album, tracks: { items: tr, next: null } };
+  }
+  async albumTracks(id) { return (await this.album(id)).tracks; }
+  async createPlaylist(name) {
+    await this._lag();
+    const p = { id: 'new' + Date.now(), name, owner: { display_name: 'Ты', id: 'demo' }, images: [], items: { total: 0 }, _tracks: [] };
+    p.uri = 'spotify:playlist:' + p.id;
+    this.lists.push(p);
+    return p;
+  }
+  async addToPlaylist(id, uris) {
+    await this._lag();
+    const p = this.lists.find((l) => l.id === id);
+    uris.forEach((u) => { const x = this.tracks.find((tr) => tr.uri === u); if (x) p._tracks.push(x); });
+    p.items.total = p._tracks.length;
+    if (!p.images.length && p._tracks[0]) p.images = p._tracks[0].album.images;
+  }
+  // В демо тексты придуманы, чтобы было видно, как работает синхронизация
+  async demoLyrics(item) {
+    await this._lag();
+    const pool = [
+      'Город спит, а мы ещё нет', 'Фары режут темноту', 'Я ловлю твой тихий свет', 'И снова слышу ту мечту',
+      'Ветер шепчет нам вперёд', 'Каждый шаг звучит как бит', 'Пусть весь мир нас подождёт', 'Это небо не молчит',
+      '', 'Лови волну, лови момент', 'Мы громче, чем вчера', 'Ещё один эксперимент', 'И музыка до утра',
+    ];
+    const n = Math.floor(item.duration_ms / 4200);
+    const lines = [];
+    for (let i = 0; i < n; i++) lines.push(`[${String(Math.floor((i * 4.2 + 2) / 60)).padStart(2, '0')}:${((i * 4.2 + 2) % 60).toFixed(2).padStart(5, '0')}] ${pool[i % pool.length]}`);
+    return { syncedLyrics: lines.join('\n') };
+  }
 }
 
 /* =====================================================================
@@ -718,6 +798,7 @@ function onTrackChange(item) {
     api.isSaved(uri).then((r) => { if (ui.trackUri === uri) setLiked(!!(r && r[0]), false); }).catch(() => {});
   }
   loadCover(pickImage(itemImages(item), 600));
+  lyricsTrackChanged(item);
 }
 
 function loadCover(url) {
@@ -830,6 +911,8 @@ function updateProgress(force) {
 
 function progressLoop() {
   updateProgress(false);
+  syncLyrics();
+  updateClock();
   ui.raf = requestAnimationFrame(progressLoop);
 }
 
@@ -891,6 +974,7 @@ function handleError(e, fromPoll) {
     if (fromPoll) return;
     if (e.reason === 'PREMIUM_REQUIRED') toast('Для управления нужен Spotify Premium');
     else if (/not registered|developer dashboard/i.test(e.message)) toast('Этот аккаунт не добавлен в Users Management приложения в Spotify Dashboard');
+    else if (/scope/i.test(e.message)) toast('Нужно войти заново, чтобы разрешить это действие (Настройки → Выйти)');
     else toast('Сейчас это действие недоступно');
     return;
   }
@@ -1020,7 +1104,7 @@ function row({ img, iconName, iconClass, round, title, sub, current, onClick, ac
   return node;
 }
 
-function trackRow(t, onClick, withQueue = true) {
+function trackRow(t, onClick, withQueue = true, sub) {
   if (!t) return null;
   const action = withQueue && t.uri && !t.uri.startsWith('spotify:local:')
     ? el('button', {
@@ -1034,7 +1118,7 @@ function trackRow(t, onClick, withQueue = true) {
   return row({
     img: pickImage(itemImages(t), 64),
     title: t.name,
-    sub: itemArtists(t),
+    sub: sub ?? itemArtists(t),
     current: t.uri === ui.trackUri,
     onClick,
     action,
@@ -1089,7 +1173,11 @@ function libraryView() {
         iconName: 'heartFill', iconClass: 'liked', title: 'Любимые треки', sub: 'Всё, что ты лайкнул',
         onClick: () => pushView(likedView()),
       });
-      body.append(el('div', { class: 'list' }, liked), el('div', { class: 'section-label' }, 'Плейлисты'));
+      const stats = row({
+        iconName: 'stats', title: 'Моя статистика', sub: 'Топ треков и артистов, история',
+        onClick: () => pushView(statsView()),
+      });
+      body.append(el('div', { class: 'list' }, liked, stats), el('div', { class: 'section-label' }, 'Плейлисты'));
       pagedList(body, (o) => api.playlists(o), (p) => {
         if (!p) return null;
         const total = (p.items || p.tracks)?.total;
@@ -1307,6 +1395,34 @@ function settingsView() {
       api.me().then((m) => { user.textContent = m?.display_name || m?.id || 'Spotify'; }).catch(() => { user.textContent = 'Spotify'; });
       body.append(el('div', { class: 'settings-card' }, el('h3', {}, api.isDemo ? 'Демо-режим' : 'Аккаунт'), user));
 
+      body.append(el('div', { class: 'settings-card' },
+        el('h3', {}, 'Тема'),
+        el('p', {}, 'Цвета всё равно подстраиваются под обложку.'),
+        chipGroup([['aura', 'Аура'], ['vinyl', 'Винил'], ['neon', 'Неон'], ['minimal', 'Минимализм']], settings.theme, (v) => {
+          settings.theme = v;
+          saveSettings();
+          applyLook();
+        })));
+
+      body.append(el('div', { class: 'settings-card' },
+        el('h3', {}, 'Визуализатор'),
+        el('p', {}, '«Декор» — анимация в такт без доступа к звуку. «Микрофон» — настоящая реакция на музыку из динамика (нужно разрешение).'),
+        chipGroup([['auto', 'Авто'], ['off', 'Выкл'], ['decor', 'Декор'], ['mic', 'Микрофон']], settings.viz, (v) => {
+          settings.viz = v;
+          saveSettings();
+          updateViz();
+        })));
+
+      body.append(el('div', { class: 'settings-card' },
+        el('h3', {}, 'Экран'),
+        switchRow('Не гасить экран, пока Aura открыта', settings.wakeLock, (on) => {
+          settings.wakeLock = on;
+          saveSettings();
+          updateWakeLock();
+        }),
+        el('button', { class: 'btn-ghost', type: 'button', html: icon('expand') + 'Полный экран', onclick: toggleFullscreen }),
+        el('p', { style: 'margin-top:10px;font-size:13px' }, 'Поверни планшет или открой Aura на компьютере — включится режим большого экрана с часами и текстом песни.')));
+
       const install = el('div', { class: 'settings-card' },
         el('h3', {}, 'Установить на телефон'),
         isStandalone()
@@ -1335,12 +1451,25 @@ function settingsView() {
 /* =====================================================================
    Жесты
    ===================================================================== */
+// Обложка: свайп — переключить трек, двойной тап — лайк, долгое нажатие — меню трека
 function bindArtGestures() {
   const art = $('#art');
-  let x0 = null, y0 = 0, lastTap = 0;
-  art.addEventListener('pointerdown', (e) => { x0 = e.clientX; y0 = e.clientY; });
+  let x0 = null, y0 = 0, lastTap = 0, pressTimer = 0, longPressed = false;
+  art.addEventListener('pointerdown', (e) => {
+    x0 = e.clientX; y0 = e.clientY; longPressed = false;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => {
+      longPressed = true;
+      navigator.vibrate?.(15);
+      openSheet(trackMenuView());
+    }, 520);
+  });
+  art.addEventListener('pointermove', (e) => {
+    if (x0 != null && Math.hypot(e.clientX - x0, e.clientY - y0) > 10) clearTimeout(pressTimer);
+  });
   art.addEventListener('pointerup', (e) => {
-    if (x0 == null) return;
+    clearTimeout(pressTimer);
+    if (x0 == null || longPressed) { x0 = null; return; }
     const dx = e.clientX - x0, dy = e.clientY - y0;
     x0 = null;
     if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { skip(dx < 0 ? 1 : -1); return; }
@@ -1350,7 +1479,676 @@ function bindArtGestures() {
       else lastTap = now;
     }
   });
-  art.addEventListener('pointercancel', () => { x0 = null; });
+  art.addEventListener('pointercancel', () => { x0 = null; clearTimeout(pressTimer); });
+  art.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+// Весь экран плеера: свайп вверх — очередь, вниз — медиатека
+function bindPlayerSwipes() {
+  const p = $('#player');
+  let s = null;
+  p.addEventListener('pointerdown', (e) => {
+    s = sheet.open || e.target.closest('input, .lyrics, .no-device') ? null : { x: e.clientX, y: e.clientY, t: Date.now() };
+  });
+  p.addEventListener('pointerup', (e) => {
+    if (!s) return;
+    const dx = e.clientX - s.x, dy = e.clientY - s.y, quick = Date.now() - s.t < 700;
+    s = null;
+    if (!quick || Math.abs(dy) < 70 || Math.abs(dy) < Math.abs(dx) * 1.4) return;
+    openSheet(dy < 0 ? queueView() : libraryView());
+  });
+  p.addEventListener('pointercancel', () => { s = null; });
+}
+
+/* =====================================================================
+   Текст песни (LRCLIB — открытая бесплатная база текстов)
+   ===================================================================== */
+const WIDE_MQ = matchMedia('(min-width: 900px) and (orientation: landscape)');
+const lyr = { uri: null, data: null, lines: null, idx: -1, loading: null, userScrollAt: 0, cache: new Map() };
+
+function lyricsVisible() { return !!api && ($('#player').classList.contains('lyrics-mode') || WIDE_MQ.matches); }
+
+function lyricsTrackChanged(item) {
+  lyr.uri = item.uri;
+  lyr.data = null;
+  lyr.lines = null;
+  lyr.idx = -1;
+  if (lyricsVisible()) loadLyrics();
+  else $('#lyricsInner').replaceChildren();
+}
+
+function toggleLyrics(force) {
+  const p = $('#player');
+  const on = force ?? !p.classList.contains('lyrics-mode');
+  p.classList.toggle('lyrics-mode', on);
+  $('#btnLyrics').classList.toggle('on', on);
+  if (lyricsVisible()) {
+    lyr.userScrollAt = 0;
+    loadLyrics();
+    requestAnimationFrame(() => syncLyrics(true));
+  }
+}
+
+function cleanTitle(name) {
+  return name
+    .replace(/\s*[-–]\s*(\d{4}\s*)?(remaster(ed)?|live|mono|stereo|radio edit|edit|version|single version|bonus).*$/i, '')
+    .replace(/\s*[([](feat|ft|with)\.?\s[^)\]]*[)\]]/i, '')
+    .trim();
+}
+
+async function fetchLyrics(item) {
+  if (api.isDemo) return api.demoLyrics(item);
+  const artist = item.artists?.[0]?.name || '';
+  const duration = Math.round(item.duration_ms / 1000);
+  const exact = await fetch('https://lrclib.net/api/get?' + new URLSearchParams({
+    track_name: item.name, artist_name: artist, album_name: item.album?.name || '', duration,
+  })).catch(() => null);
+  if (exact?.ok) {
+    const d = await exact.json();
+    if (d.syncedLyrics || d.plainLyrics || d.instrumental) return d;
+  }
+  // Точного совпадения нет (или сервис ответил ошибкой) — ищем по упрощённому названию
+  const res = await fetch('https://lrclib.net/api/search?' + new URLSearchParams({ track_name: cleanTitle(item.name), artist_name: artist }));
+  if (!res.ok) throw new Error('lrclib ' + res.status);
+  const list = (await res.json()) || [];
+  const close = list.filter((x) => Math.abs((x.duration || 0) - duration) <= 4);
+  return close.find((x) => x.syncedLyrics) || close.find((x) => x.plainLyrics) || list.find((x) => x.syncedLyrics) || null;
+}
+
+async function loadLyrics() {
+  const item = ui.pb?.item;
+  const box = $('#lyricsInner');
+  if (!item) { box.replaceChildren(el('div', { class: 'ly-note' }, 'Сейчас ничего не играет')); return; }
+  const uri = item.uri;
+  if ((lyr.data && lyr.uri === uri) || lyr.loading === uri) return;
+  if (item.type === 'episode') { showLyrics(uri, { note: 'У подкастов нет текста' }); return; }
+  let data = lyr.cache.get(uri);
+  if (!data) {
+    lyr.loading = uri;
+    box.replaceChildren(loader());
+    try {
+      data = (await fetchLyrics(item)) || { none: true };
+      lyr.cache.set(uri, data);
+    } catch {
+      data = { error: true };
+    } finally {
+      if (lyr.loading === uri) lyr.loading = null;
+    }
+  }
+  if (ui.trackUri === uri) showLyrics(uri, data);
+}
+
+function parseLRC(text) {
+  const out = [];
+  for (const raw of text.split('\n')) {
+    const tags = [...raw.matchAll(/\[(\d+):(\d+(?:[.:]\d+)?)\]/g)];
+    if (!tags.length) continue;
+    const words = raw.replace(/\[[^\]]*\]/g, '').trim();
+    for (const t of tags) out.push({ t: (Number(t[1]) * 60 + Number(t[2].replace(':', '.'))) * 1000, text: words });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+
+function showLyrics(uri, data) {
+  lyr.uri = uri;
+  lyr.data = data.error ? null : data; // при ошибке сети попробуем ещё раз позже
+  lyr.lines = null;
+  lyr.idx = -1;
+  const box = $('#lyricsInner');
+  box.replaceChildren();
+  const noteEl = (t) => el('div', { class: 'ly-note' }, t);
+  if (data.error) { box.append(noteEl('Не удалось загрузить текст. Проверь интернет.')); return; }
+  if (data.instrumental) { box.append(noteEl('Инструментал — просто слушай ♪')); return; }
+  if (data.syncedLyrics) {
+    lyr.lines = parseLRC(data.syncedLyrics);
+    lyr.lines.forEach((l) => box.append(el('button', {
+      class: 'ly-line' + (l.text ? '' : ' gap'), type: 'button',
+      onclick: () => { lyr.userScrollAt = 0; command(() => api.seek(l.t), (s) => { s.progress_ms = l.t; }); },
+    }, l.text || '♪ ♪ ♪')));
+  } else if (data.plainLyrics) {
+    box.append(noteEl('Текст без синхронизации'), el('div', { class: 'ly-plain' }, data.plainLyrics));
+  } else {
+    box.append(noteEl(data.note || 'Текста для этой песни не нашлось'));
+    return;
+  }
+  box.append(el('div', { class: 'ly-source' }, api.isDemo ? 'Демо-текст' : 'Текст: LRCLIB'));
+  $('#lyrics').scrollTop = 0;
+  syncLyrics(true);
+}
+
+function syncLyrics(force) {
+  if (!lyr.lines || lyr.uri !== ui.trackUri || !lyricsVisible()) return;
+  const pos = currentPos() + 300;
+  let i = lyr.idx;
+  if (i >= 0 && lyr.lines[i].t > pos) i = -1; // перемотали назад
+  while (i + 1 < lyr.lines.length && lyr.lines[i + 1].t <= pos) i++;
+  if (i === lyr.idx && !force) return;
+  lyr.idx = i;
+  const nodes = $('#lyricsInner').children;
+  for (let k = 0; k < lyr.lines.length; k++) {
+    nodes[k].classList.toggle('active', k === i);
+    nodes[k].classList.toggle('past', k < i);
+  }
+  // Если человек сам листает текст — не мешаем 4 секунды
+  if (Date.now() - lyr.userScrollAt > 4000) {
+    const c = $('#lyrics'), target = nodes[Math.max(i, 0)];
+    c.scrollTo({ top: target.offsetTop - c.clientHeight * 0.38, behavior: force ? 'auto' : 'smooth' });
+  }
+}
+
+let clockMin = -1;
+function updateClock() {
+  if (!WIDE_MQ.matches) return;
+  const d = new Date();
+  if (d.getMinutes() === clockMin) return;
+  clockMin = d.getMinutes();
+  $('#clock').textContent = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+/* =====================================================================
+   Статистика
+   ===================================================================== */
+function chipGroup(options, value, onPick) {
+  const wrap = el('div', { class: 'tabs' });
+  for (const [v, label] of options) {
+    const b = el('button', { class: 'tab' + (v === value ? ' active' : ''), type: 'button' }, label);
+    b.addEventListener('click', () => {
+      wrap.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === b));
+      onPick(v);
+    });
+    wrap.append(b);
+  }
+  return wrap;
+}
+
+function switchRow(label, checked, onChange) {
+  const input = el('input', { type: 'checkbox', checked });
+  input.addEventListener('change', () => onChange(input.checked));
+  return el('label', { class: 'switch-row' }, el('span', {}, label), el('span', { class: 'switch' }, input, el('i')));
+}
+
+function timeAgo(iso) {
+  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (m < 1) return 'только что';
+  if (m < 60) return `${m} мин назад`;
+  if (m < 24 * 60) return `${Math.round(m / 60)} ч назад`;
+  return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
+function needRelogin(e) {
+  if (e.status === 401 || e.status === 403) {
+    return el('div', {},
+      note('Нужно разрешить Aura доступ к этим данным. Войди ещё раз — это займёт пару секунд.'),
+      el('button', { class: 'btn-primary more-btn', type: 'button', onclick: () => Auth.login() }, 'Войти заново'));
+  }
+  return note('Не удалось загрузить. Проверь интернет.');
+}
+
+function statsView() {
+  let tab = 'tracks', range = 'short_term', seq = 0;
+  return {
+    title: 'Моя статистика',
+    render(body) {
+      const out = el('div');
+      const rangeBox = chipGroup([['short_term', '4 недели'], ['medium_term', '6 месяцев'], ['long_term', 'Всё время']], range, (v) => { range = v; load(); });
+      const tabs = chipGroup([['tracks', 'Треки'], ['artists', 'Артисты'], ['recent', 'Недавние']], tab, (v) => {
+        tab = v;
+        rangeBox.hidden = v === 'recent';
+        load();
+      });
+      body.append(tabs, rangeBox, out);
+      const ranked = (i, node) => { node.prepend(el('span', { class: 'rank' }, i + 1)); return node; };
+
+      async function load() {
+        const my = ++seq;
+        out.replaceChildren(loader());
+        try {
+          let rows;
+          if (tab === 'recent') {
+            const r = await api.recentlyPlayed();
+            rows = (r?.items || []).filter((x) => x?.track).map((x) => trackRow(x.track,
+              async () => { if (await playOn({ uris: [x.track.uri] })) closeSheet(); },
+              true, `${itemArtists(x.track)} · ${timeAgo(x.played_at)}`));
+          } else if (tab === 'tracks') {
+            const items = ((await api.topItems('tracks', range))?.items || []).filter(Boolean);
+            const uris = items.map((t) => t.uri);
+            rows = items.map((t, i) => ranked(i, trackRow(t, async () => { if (await playOn({ uris: uris.slice(i, i + 50) })) closeSheet(); })));
+          } else {
+            const items = ((await api.topItems('artists', range))?.items || []).filter(Boolean);
+            rows = items.map((a, i) => ranked(i, row({
+              img: pickImage(a.images, 64), iconName: 'user', round: true, title: a.name,
+              sub: (a.genres || []).slice(0, 2).join(', ') || 'Артист',
+              onClick: () => pushView(artistView(a)),
+            })));
+          }
+          if (my !== seq) return;
+          out.replaceChildren(rows.length ? el('div', { class: 'list' }, rows) : note('Пока мало данных — послушай побольше музыки'));
+        } catch (e) {
+          if (my === seq) out.replaceChildren(needRelogin(e));
+        }
+      }
+      load();
+    },
+  };
+}
+
+/* =====================================================================
+   Карточка «Сейчас слушаю» для сторис
+   ===================================================================== */
+function loadImg(url) {
+  return new Promise((resolve, reject) => {
+    if (!url) { reject(new Error('no url')); return; }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+// Пишет текст в несколько строк, возвращает y после последней строки
+function wrapText(x, text, left, top, maxW, lineH, maxLines) {
+  const words = text.split(/\s+/);
+  const lines = [];
+  let cur = '';
+  for (const w of words) {
+    const test = cur ? cur + ' ' + w : w;
+    if (x.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; } else cur = test;
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > maxLines) {
+    lines.length = maxLines;
+    let last = lines[maxLines - 1];
+    while (x.measureText(last + '…').width > maxW && last.length) last = last.slice(0, -1);
+    lines[maxLines - 1] = last + '…';
+  }
+  lines.forEach((l, i) => x.fillText(l, left, top + i * lineH));
+  return top + (lines.length - 1) * lineH;
+}
+
+async function shareCard() {
+  const item = ui.pb?.item;
+  if (!item) { toast('Сейчас ничего не играет'); return; }
+  toast('Готовлю картинку…');
+  const W = 1080, H = 1920;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const bg1 = css.getPropertyValue('--bg1').trim() || DEFAULT_THEME.bg1;
+  const bg2 = css.getPropertyValue('--bg2').trim() || DEFAULT_THEME.bg2;
+  const accent = css.getPropertyValue('--accent').trim() || DEFAULT_THEME.accent;
+
+  const g = x.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, bg1);
+  g.addColorStop(1, bg2);
+  x.fillStyle = g;
+  x.fillRect(0, 0, W, H);
+
+  const img = await loadImg(pickImage(itemImages(item), 600)).catch(() => null);
+  const S = 820, cx = (W - S) / 2, cy = 300;
+  if (img) {
+    x.save();
+    x.filter = 'blur(90px) saturate(1.5)';
+    x.globalAlpha = 0.6;
+    x.drawImage(img, -300, -250, W + 600, W + 600);
+    x.restore();
+    const fade = x.createLinearGradient(0, H * 0.35, 0, H);
+    fade.addColorStop(0, 'rgba(0,0,0,0)');
+    fade.addColorStop(1, bg2);
+    x.fillStyle = fade;
+    x.fillRect(0, 0, W, H);
+    x.save();
+    x.shadowColor = 'rgba(0,0,0,0.55)';
+    x.shadowBlur = 90;
+    x.shadowOffsetY = 40;
+    x.beginPath(); x.roundRect(cx, cy, S, S, 44); x.fillStyle = '#000'; x.fill();
+    x.restore();
+    x.save();
+    x.beginPath(); x.roundRect(cx, cy, S, S, 44); x.clip();
+    x.drawImage(img, cx, cy, S, S);
+    x.restore();
+  }
+
+  const left = cx;
+  x.fillStyle = 'rgba(255,255,255,0.6)';
+  x.font = '800 32px Manrope, system-ui, sans-serif';
+  x.letterSpacing = '6px';
+  x.fillText('СЕЙЧАС СЛУШАЮ', left, 1250);
+  x.letterSpacing = '0px';
+  x.fillStyle = '#fff';
+  x.font = '800 78px Manrope, system-ui, sans-serif';
+  let y = wrapText(x, item.name, left, 1350, S, 90, 2);
+  x.fillStyle = 'rgba(255,255,255,0.75)';
+  x.font = '600 44px Manrope, system-ui, sans-serif';
+  y = wrapText(x, itemArtists(item), left, y + 72, S, 54, 1);
+
+  // полоска прогресса
+  const pos = currentPos(), dur = item.duration_ms || 1;
+  const barY = Math.max(y + 90, 1600);
+  x.fillStyle = 'rgba(255,255,255,0.22)';
+  x.beginPath(); x.roundRect(left, barY, S, 10, 5); x.fill();
+  x.fillStyle = accent;
+  x.beginPath(); x.roundRect(left, barY, Math.max(10, S * (pos / dur)), 10, 5); x.fill();
+  x.fillStyle = 'rgba(255,255,255,0.55)';
+  x.font = '700 30px Manrope, system-ui, sans-serif';
+  x.fillText(fmtTime(pos), left, barY + 56);
+  x.textAlign = 'right';
+  x.fillText(fmtTime(dur), left + S, barY + 56);
+
+  // подпись внизу
+  x.textAlign = 'center';
+  x.fillStyle = 'rgba(255,255,255,0.5)';
+  x.font = '800 30px Manrope, system-ui, sans-serif';
+  x.letterSpacing = '4px';
+  x.fillText('AURA PLAYER', W / 2, H - 90);
+
+  let blob;
+  try {
+    blob = await new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('blob'))), 'image/png'));
+  } catch {
+    toast('Не получилось сделать картинку');
+    return;
+  }
+  const file = new File([blob], 'aura-now-playing.png', { type: 'image/png' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: item.name, text: `${item.name} — ${itemArtists(item)}` });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+  const a = el('a', { href: URL.createObjectURL(blob), download: 'aura-now-playing.png' });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('Картинка сохранена');
+}
+
+/* =====================================================================
+   Визуализатор
+   ===================================================================== */
+const viz = { mode: 'off', raf: 0, analyser: null, stream: null, actx: null, data: null, level: 0, accent: '#fff', accentAt: 0, starting: false };
+
+function vizMode() {
+  if (settings.viz === 'auto') return settings.theme === 'neon' ? 'decor' : 'off';
+  return settings.viz;
+}
+
+function updateViz() {
+  const mode = api ? vizMode() : 'off';
+  $('#viz').hidden = mode === 'off';
+  if (mode !== 'mic' || document.hidden) stopMic();
+  viz.mode = mode;
+  cancelAnimationFrame(viz.raf);
+  if (mode === 'off') return;
+  if (mode === 'mic' && !viz.analyser && !document.hidden) startMic();
+  drawViz();
+}
+
+async function startMic() {
+  if (viz.starting) return;
+  viz.starting = true;
+  try {
+    viz.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+    viz.actx = new AudioContext();
+    const an = viz.actx.createAnalyser();
+    an.fftSize = 512;
+    an.smoothingTimeConstant = 0.78;
+    viz.actx.createMediaStreamSource(viz.stream).connect(an);
+    viz.analyser = an;
+    viz.data = new Uint8Array(an.frequencyBinCount);
+    // Браузер запускает звук только после касания экрана
+    if (viz.actx.state === 'suspended') document.addEventListener('pointerdown', () => viz.actx?.resume(), { once: true });
+  } catch {
+    stopMic();
+    toast('Нет доступа к микрофону — включаю декоративный режим');
+    settings.viz = 'decor';
+    saveSettings();
+    updateViz();
+  } finally {
+    viz.starting = false;
+  }
+}
+
+function stopMic() {
+  viz.stream?.getTracks().forEach((t) => t.stop());
+  viz.actx?.close().catch(() => {});
+  viz.stream = viz.actx = viz.analyser = null;
+}
+
+function drawViz() {
+  viz.raf = requestAnimationFrame(drawViz);
+  const c = $('#viz');
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w || !h) return; // скрыт (например, открыт текст песни)
+  const dpr = devicePixelRatio || 1;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+  }
+  const x = c.getContext('2d');
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.clearRect(0, 0, w, h);
+  if (Date.now() - viz.accentAt > 500) {
+    viz.accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#fff';
+    viz.accentAt = Date.now();
+  }
+  const n = clamp(Math.floor(w / 9), 16, 72);
+  const gap = 3, bw = (w - gap * (n - 1)) / n;
+  viz.level += ((ui.pb?.is_playing ? 1 : 0.05) - viz.level) * 0.05;
+  const t = performance.now() / 1000;
+  const mic = viz.mode === 'mic' && viz.analyser;
+  if (mic) viz.analyser.getByteFrequencyData(viz.data);
+  x.fillStyle = viz.accent;
+  for (let i = 0; i < n; i++) {
+    let v;
+    if (mic) {
+      // квадратичная шкала: больше полос отдаём басам и середине
+      const len = viz.data.length * 0.7;
+      const lo = Math.floor((i / n) ** 2 * len), hi = Math.max(lo + 1, Math.floor(((i + 1) / n) ** 2 * len));
+      let s = 0;
+      for (let k = lo; k < hi; k++) s += viz.data[k];
+      v = s / (hi - lo) / 255;
+    } else {
+      const center = 1 - (Math.abs(i - n / 2) / (n / 2)) * 0.55;
+      v = (Math.sin(t * 2.1 + i * 0.55) + Math.sin(t * 3.3 + i * 1.31) + Math.sin(t * 1.3 + i * 2.7) + 3) / 6;
+      v = v ** 1.6 * center * viz.level;
+    }
+    const bh = Math.max(3, v * h);
+    x.globalAlpha = 0.35 + v * 0.65;
+    x.beginPath();
+    x.roundRect(i * (bw + gap), (h - bh) / 2, bw, bh, Math.min(bw / 2, 3));
+    x.fill();
+  }
+  x.globalAlpha = 1;
+}
+
+/* =====================================================================
+   Внешний вид, экран
+   ===================================================================== */
+const settings = Object.assign({ theme: 'aura', viz: 'auto', wakeLock: false }, store.get('settings', {}));
+function saveSettings() { store.set('settings', settings); }
+function applyLook() {
+  document.body.dataset.theme = settings.theme;
+  updateViz();
+}
+
+const wake = { sentinel: null };
+async function updateWakeLock() {
+  const want = settings.wakeLock && !!api && !document.hidden;
+  if (want && !wake.sentinel && 'wakeLock' in navigator) {
+    try {
+      wake.sentinel = await navigator.wakeLock.request('screen');
+      wake.sentinel.addEventListener('release', () => { wake.sentinel = null; });
+    } catch {}
+  } else if (!want && wake.sentinel) {
+    wake.sentinel.release().catch(() => {});
+    wake.sentinel = null;
+  }
+}
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen?.().catch(() => toast('Полный экран тут недоступен'));
+}
+
+/* =====================================================================
+   Артисты, альбомы, плейлисты, меню трека
+   ===================================================================== */
+function playButtons(uri) {
+  return el('div', { class: 'hero-actions' },
+    el('button', { class: 'btn-primary', type: 'button', html: icon('play') + 'Слушать',
+      onclick: async () => { await setShuffleQuiet(false); if (await playOn({ context_uri: uri })) closeSheet(); } }),
+    el('button', { class: 'btn-ghost', type: 'button', html: icon('shuffle') + 'Вперемешку',
+      onclick: async () => { await setShuffleQuiet(true); if (await playOn({ context_uri: uri })) closeSheet(); } }));
+}
+
+function heroTitle(title, sub, onSubClick) {
+  return el('div', {},
+    el('div', { class: 'row-title', style: 'font-size:21px;white-space:normal' }, title),
+    sub ? el(onSubClick ? 'button' : 'div', { class: 'row-sub', type: onSubClick ? 'button' : null, onclick: onSubClick, style: 'white-space:normal' }, sub) : null);
+}
+
+function artistView(a) {
+  return {
+    title: a.name || 'Артист',
+    render(body) {
+      const hero = el('div', { class: 'hero' });
+      body.append(hero);
+      const fill = (full) => {
+        const img = pickImage(full.images, 300);
+        hero.replaceChildren(
+          img ? el('img', { src: img, alt: '', style: 'border-radius:50%' })
+            : el('div', { class: 'thumb-icon', html: icon('user'), style: 'width:180px;height:180px;border-radius:50%' }),
+          heroTitle(full.name, (full.genres || []).slice(0, 3).join(', ')),
+          playButtons(full.uri || 'spotify:artist:' + full.id));
+      };
+      fill(a);
+      api.artist(a.id).then((full) => { if (full && hero.isConnected) fill(full); }).catch(() => {});
+      body.append(el('div', { class: 'section-label' }, 'Альбомы и синглы'));
+      pagedList(body, (o) => api.artistAlbums(a.id, o), (al) => al && row({
+        img: pickImage(al.images, 64), iconName: 'disc', title: al.name,
+        sub: [{ album: 'Альбом', single: 'Сингл', compilation: 'Сборник' }[al.album_type] || 'Альбом', (al.release_date || '').slice(0, 4)].filter(Boolean).join(' · '),
+        onClick: () => pushView(albumView(al)),
+      }), 'Альбомов не нашлось');
+    },
+  };
+}
+
+function albumView(al) {
+  return {
+    title: al.name,
+    render(body) {
+      const img = pickImage(al.images, 300);
+      const sub = [itemArtists(al), (al.release_date || '').slice(0, 4)].filter(Boolean).join(' · ');
+      body.append(el('div', { class: 'hero' },
+        img ? el('img', { src: img, alt: '' }) : el('div', { class: 'thumb-icon', html: icon('disc'), style: 'width:180px;height:180px;border-radius:18px' }),
+        heroTitle(al.name, sub, al.artists?.[0]?.id ? () => pushView(artistView(al.artists[0])) : null),
+        playButtons(al.uri || 'spotify:album:' + al.id)));
+      pagedList(body, (o) => api.albumTracks(al.id, o), (t, i) => {
+        if (!t) return null;
+        if (!t.album) t.album = al;
+        return trackRow(t, async () => { if (await playOn({ context_uri: al.uri || 'spotify:album:' + al.id, offset: { position: i } })) closeSheet(); });
+      }, 'Треков нет');
+    },
+  };
+}
+
+let meCache = null;
+async function getMe() {
+  if (!meCache) meCache = await api.me();
+  return meCache;
+}
+
+function addToPlaylistView(track) {
+  return {
+    title: 'Добавить в плейлист',
+    render(body) {
+      if (!track) { body.append(note('Сейчас ничего не играет')); return; }
+      body.append(el('div', { class: 'list' }, trackRow(track, null, false)));
+      const input = el('input', { class: 'search-input', type: 'text', placeholder: 'Название плейлиста', maxlength: '100', enterkeyhint: 'done' });
+      const create = el('button', { class: 'btn-primary', type: 'button' }, 'Создать');
+      const form = el('div', { class: 'inline-form', hidden: true }, input, create);
+      const newRow = row({
+        iconName: 'plus', title: 'Новый плейлист', sub: 'Создать и сразу добавить трек',
+        onClick: () => { newRow.hidden = true; form.hidden = false; input.focus(); },
+      });
+      body.append(el('div', { class: 'list' }, newRow), form, el('div', { class: 'section-label' }, 'Мои плейлисты'));
+
+      const add = async (p) => {
+        try {
+          await api.addToPlaylist(p.id, [track.uri]);
+          toast(`Добавлено в «${p.name}»`);
+          closeSheet();
+        } catch (e) { handleError(e, false); }
+      };
+      create.addEventListener('click', async () => {
+        const name = input.value.trim();
+        if (!name) { input.focus(); return; }
+        create.disabled = true;
+        try { await add(await api.createPlaylist(name)); }
+        catch (e) { handleError(e, false); }
+        finally { create.disabled = false; }
+      });
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') create.click(); });
+
+      // Добавлять можно только в свои и совместные плейлисты
+      getMe().catch(() => null).then((me) => {
+        if (!body.isConnected) return;
+        pagedList(body, (o) => api.playlists(o), (p) => {
+          if (!p || !(p.collaborative || !me || p.owner?.id === me.id)) return null;
+          const total = (p.items || p.tracks)?.total;
+          return row({
+            img: pickImage(p.images, 64), iconName: 'music', title: p.name,
+            sub: total != null ? `${total} ${plural(total, 'трек', 'трека', 'треков')}` : null,
+            onClick: () => add(p),
+          });
+        }, 'Своих плейлистов пока нет');
+      });
+    },
+  };
+}
+
+function trackMenuView() {
+  const item = ui.pb?.item;
+  return {
+    title: 'Трек',
+    render(body) {
+      if (!item) { body.append(note('Сейчас ничего не играет')); return; }
+      const img = pickImage(itemImages(item), 300);
+      body.append(el('div', { class: 'hero' }, img ? el('img', { src: img, alt: '' }) : null, heroTitle(item.name, itemArtists(item))));
+      const act = (iconName, title, onClick) => row({ iconName, title, onClick });
+      body.append(el('div', { class: 'list' },
+        act('lyrics', 'Текст песни', () => { closeSheet(); toggleLyrics(true); }),
+        act('plus', 'Добавить в плейлист', () => pushView(addToPlaylistView(item))),
+        act(ui.liked ? 'heartFill' : 'heart', ui.liked ? 'Убрать из любимых' : 'Добавить в любимые', () => { closeSheet(); toggleLike(false); }),
+        (item.artists || []).filter((a) => a.id).map((a) => act('user', 'Артист: ' + a.name, () => pushView(artistView(a)))),
+        item.album?.id ? act('disc', 'Альбом: ' + item.album.name, () => pushView(albumView(item.album))) : null,
+        act('share', 'Поделиться карточкой', () => { closeSheet(); shareCard(); }),
+      ));
+    },
+  };
+}
+
+async function openContext() {
+  const s = ui.pb, item = s?.item;
+  if (!item) return;
+  const ctx = s.context;
+  if (ctx?.type === 'playlist') {
+    try {
+      const p = await api.playlist(ctx.uri.split(':').pop());
+      openSheet(playlistView({ ...p, id: ctx.uri.split(':').pop(), uri: ctx.uri }));
+    } catch (e) { handleError(e, false); }
+  } else if (ctx?.type === 'artist' && item.artists?.[0]) {
+    openSheet(artistView(item.artists[0]));
+  } else if (ctx?.type === 'collection') {
+    openSheet(likedView());
+  } else if (item.album?.id) {
+    openSheet(albumView(item.album));
+  }
 }
 
 function bindSheetDrag() {
@@ -1413,11 +2211,15 @@ function startApp(a) {
   ui.trackUri = null;
   ui.coverUrl = null;
   ui.contextNames.clear();
+  meCache = null;
+  lyr.cache.clear();
   $('#login').hidden = true;
   $('#player').hidden = false;
   cancelAnimationFrame(ui.raf);
   progressLoop();
   poll();
+  updateViz();
+  updateWakeLock();
 }
 
 function showLogin(message) {
@@ -1433,6 +2235,8 @@ function showLogin(message) {
   clearBackground();
   applyTheme(DEFAULT_THEME);
   document.title = 'Aura Player';
+  updateViz();
+  updateWakeLock();
   if (message) toast(message);
 }
 
@@ -1499,23 +2303,48 @@ function bindUI() {
     if (e.key === 'Escape' && sheet.open) closeSheet();
     if (e.code === 'Space' && api && !sheet.open && e.target === document.body) { e.preventDefault(); togglePlay(); }
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && api) poll(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && api) poll();
+    updateWakeLock();
+    if (viz.mode === 'mic') updateViz(); // в фоне микрофон выключаем, при возврате — снова включаем
+  });
   window.addEventListener('resize', updateMarquee);
 
+  $('#btnLyrics').addEventListener('click', () => toggleLyrics());
+  $('#btnAdd').addEventListener('click', () => openSheet(addToPlaylistView(ui.pb?.item)));
+  $('#trackNameWrap').addEventListener('click', () => openSheet(trackMenuView()));
+  $('#trackNameWrap').addEventListener('keydown', (e) => { if (e.key === 'Enter') openSheet(trackMenuView()); });
+  $('#artistName').addEventListener('click', () => {
+    const a = ui.pb?.item?.artists?.find((x) => x.id);
+    if (a) openSheet(artistView(a));
+  });
+  $('#contextName').addEventListener('click', openContext);
+  for (const ev of ['touchstart', 'wheel']) {
+    $('#lyrics').addEventListener(ev, () => { lyr.userScrollAt = Date.now(); }, { passive: true });
+  }
+  WIDE_MQ.addEventListener('change', () => {
+    updateMarquee();
+    if (lyricsVisible()) { loadLyrics(); requestAnimationFrame(() => syncLyrics(true)); }
+  });
+
   bindArtGestures();
+  bindPlayerSwipes();
   bindSheetDrag();
 }
 
 async function boot() {
   bindUI();
+  document.body.dataset.theme = settings.theme;
   try {
     if (await Auth.handleRedirect()) { startApp(new SpotifyApi()); return; }
   } catch (e) {
     showLogin(e.message);
     return;
   }
+  const token = store.get('token');
   if (store.get('demo')) startApp(new DemoApi());
-  else if (store.get('token')) startApp(new SpotifyApi());
+  else if (token && token.v !== CONFIG.scopesVersion) showLogin('Aura обновилась! Войди ещё раз, чтобы включить статистику и плейлисты');
+  else if (token) startApp(new SpotifyApi());
   else showLogin();
 }
 

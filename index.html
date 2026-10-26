@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
-  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
   <!-- Фон: размытая обложка + градиент из её цветов -->
@@ -58,8 +58,9 @@
     <header class="top">
       <button class="icon-btn" id="btnLibrary" type="button" aria-label="Медиатека" data-icon="library"></button>
       <div class="top-title">
+        <span class="clock" id="clock"></span>
         <span class="eyebrow" id="contextType">Сейчас играет</span>
-        <span class="context-name" id="contextName">—</span>
+        <button class="context-name" id="contextName" type="button">—</button>
       </div>
       <button class="icon-btn" id="btnMenu" type="button" aria-label="Настройки" data-icon="more"></button>
     </header>
@@ -71,11 +72,19 @@
       </div>
     </div>
 
+    <!-- Текст песни: на телефоне вместо обложки, на широком экране справа -->
+    <div class="lyrics" id="lyrics">
+      <div class="lyrics-inner" id="lyricsInner"></div>
+    </div>
+
+    <canvas class="viz" id="viz" hidden></canvas>
+
     <div class="meta">
       <div class="titles">
-        <div class="marquee" id="trackNameWrap"><h1 id="trackName">—</h1></div>
-        <p id="artistName">—</p>
+        <div class="marquee" id="trackNameWrap" role="button" tabindex="0" aria-label="Меню трека"><h1 id="trackName">—</h1></div>
+        <button class="artist-link" id="artistName" type="button">—</button>
       </div>
+      <button class="icon-btn" id="btnAdd" type="button" aria-label="Добавить в плейлист" data-icon="plus"></button>
       <button class="icon-btn like" id="btnLike" type="button" aria-label="Нравится" data-icon="heart"></button>
     </div>
 
@@ -97,6 +106,7 @@
         <span data-icon="speaker"></span><span id="deviceName">Устройство</span>
       </button>
       <div class="bottom-right">
+        <button class="icon-btn small" id="btnLyrics" type="button" aria-label="Текст песни" data-icon="lyrics"></button>
         <button class="icon-btn small" id="btnSearch" type="button" aria-label="Поиск" data-icon="search"></button>
         <button class="icon-btn small" id="btnQueue" type="button" aria-label="Очередь" data-icon="queue"></button>
       </div>
@@ -129,6 +139,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
