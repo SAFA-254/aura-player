@@ -131,10 +131,15 @@ class NowBar : Service() {
         }
     }
 
+    private var apiAt = 0L
+
     private fun poll() {
         main.removeCallbacks(tick)
         io.execute {
-            val st = try { Spotify(this).state() } catch (_: Exception) { null }
+            // Музыка играет в плеере Aura — всё знаем и так, в Spotify ходим лишь раз в минуту
+            // (проверить, не переключили ли музыку на другое устройство)
+            val local = if (Engine.playing && SystemClock.elapsedRealtime() - apiAt < 60_000) Engine.snapshot() else null
+            val st = local ?: try { Spotify(this).state().also { apiAt = SystemClock.elapsedRealtime() } } catch (_: Exception) { null }
             val item = st?.optJSONObject("item")
             if (item != null) {
                 val url = cover(item)

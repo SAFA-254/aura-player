@@ -32,6 +32,10 @@ window.onSpotifyWebPlaybackSDKReady = () => {
       position: st.position,
       duration: st.duration,
       track: st.track_window?.current_track?.name || '',
+      uri: st.track_window?.current_track?.uri || '',
+      artists: (st.track_window?.current_track?.artists || []).map((a) => a.name).join(', '),
+      album: st.track_window?.current_track?.album?.name || '',
+      image: (st.track_window?.current_track?.album?.images || []).slice().sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url || '',
     }) : '');
   });
   window.player = p;

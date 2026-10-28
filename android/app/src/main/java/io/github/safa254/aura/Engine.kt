@@ -37,6 +37,25 @@ object Engine {
     @Volatile var track = ""
     @Volatile var position = 0L
     @Volatile var duration = 0L
+    @Volatile var trackUri = ""
+    @Volatile var artists = ""
+    @Volatile var album = ""
+    @Volatile var image = ""
+    @Volatile var stateAt = 0L
+
+    /** Что играет в плеере Aura — в том же виде, что /me/player у Spotify (без запроса в сеть). */
+    fun snapshot(): JSONObject? {
+        if (deviceId == null || trackUri.isEmpty()) return null
+        val images = org.json.JSONArray().apply { if (image.isNotEmpty()) put(JSONObject().put("url", image).put("width", 300)) }
+        val names = org.json.JSONArray().apply { artists.split(", ").filter { it.isNotBlank() }.forEach { put(JSONObject().put("name", it)) } }
+        val pos = position + if (playing) android.os.SystemClock.elapsedRealtime() - stateAt else 0
+        return JSONObject()
+            .put("is_playing", playing)
+            .put("progress_ms", pos.coerceAtMost(duration))
+            .put("device", JSONObject().put("id", deviceId))
+            .put("item", JSONObject().put("name", track).put("uri", trackUri).put("duration_ms", duration)
+                .put("artists", names).put("album", JSONObject().put("name", album).put("images", images)))
+    }
 
     /** Окно Aura, если открыто: сюда отправляем события плеера. */
     var listener: ((String) -> Unit)? = null
@@ -194,6 +213,12 @@ object Engine {
             track = st?.optString("track") ?: ""
             position = st?.optLong("position") ?: 0
             duration = st?.optLong("duration") ?: 0
+            trackUri = st?.optString("uri") ?: ""
+            artists = st?.optString("artists") ?: ""
+            album = st?.optString("album") ?: ""
+            image = st?.optString("image") ?: ""
+            stateAt = android.os.SystemClock.elapsedRealtime()
+            NowBar.running?.let { nb -> main.post { nb.poke() } }
             if (now != playing) {
                 playing = now
                 AuraLog.add(app, (if (now) "играет" else "пауза") + " · $track ${position / 60000}:${"%02d".format(position / 1000 % 60)}")

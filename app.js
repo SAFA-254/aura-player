@@ -29,7 +29,7 @@ const CONFIG = {
   ].join(' '),
   // Увеличивай, когда меняется список scopes — Aura попросит войти заново.
   scopesVersion: 2,
-  pollMs: 3000,
+  pollMs: 4000,
 };
 const REDIRECT_URI = location.origin + location.pathname.replace(/index\.html$/, '');
 const API = 'https://api.spotify.com/v1';
@@ -301,6 +301,9 @@ class SpotifyApi {
   // Spotify строго ограничивает частоту запросов (особенно в режиме разработки):
   // не больше 4 одновременно и не чаще раза в 60 мс, а на «подождите» (429) — ждём и повторяем
   async _slot() {
+    // Spotify просит подождать дольше пары секунд — не зависаем, а сразу отвечаем «подожди»
+    const left = this.backoffUntil - Date.now();
+    if (left > 4000) throw new ApiError(429, `Spotify просит подождать ${Math.ceil(left / 1000)} с`);
     if (this.active >= 4) await new Promise((r) => this.waiting.push(r));
     this.active++;
     const wait = Math.max(this.backoffUntil - Date.now(), this.lastAt + 60 - Date.now(), 0);
@@ -319,8 +322,8 @@ class SpotifyApi {
       try {
         return await this._req(method, path, opts);
       } catch (e) {
-        // Подождать столько, сколько попросил Spotify (до 20 с), и попробовать ещё раз
-        if (e.status !== 429 || attempt >= 2 || this.backoffUntil - Date.now() > 20000) throw e;
+        // Короткое «подожди» (до 4 с) — ждём и повторяем сами, длинное — сразу сообщаем
+        if (e.status !== 429 || attempt >= 2 || this.backoffUntil - Date.now() > 4000) throw e;
       } finally {
         this._free();
       }
@@ -345,7 +348,11 @@ class SpotifyApi {
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch {}
     if (!res.ok) {
-      if (res.status === 429) this.backoffUntil = Date.now() + Math.min(Number(res.headers.get('Retry-After')) || 5, 120) * 1000;
+      if (res.status === 429) {
+        const sec = Math.min(Number(res.headers.get('Retry-After')) || 5, 120);
+        this.backoffUntil = Date.now() + sec * 1000;
+        localLog(`Spotify: слишком много запросов, жду ${sec} с (${path.split('?')[0]})`);
+      }
       throw new ApiError(res.status, data?.error?.message || 'Ошибка ' + res.status, data?.error?.reason);
     }
     return data;
@@ -1819,7 +1826,7 @@ function handleError(e, fromPoll) {
     return;
   }
   if (e.status === 429) {
-    if (!fromPoll) toast('Слишком много запросов, подожди пару секунд');
+    if (!fromPoll) toast(/подождать \d/.test(e.message) ? e.message : 'Spotify просит подождать пару секунд');
     return;
   }
   if (fromPoll) {
