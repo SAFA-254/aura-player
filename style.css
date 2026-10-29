@@ -878,3 +878,8 @@ body.canvas .art.paused::before { animation-play-state: paused; }
   body.hub-mode .mini-progress { display: none; }
   body.hub-mode.hub-mode .toast { bottom: 110px; }
 }
+
+/* Большой экран: выезжающий плеер занимает всю ширину (ограничение 520px — только для телефона) */
+@media (min-width: 900px) and (orientation: landscape) {
+  .player.overlay { padding: 20px 5vw 28px; }
+}
