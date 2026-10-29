@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
-  <link rel="stylesheet" href="style.css?v=35">
+  <link rel="stylesheet" href="style.css?v=36">
 </head>
 <body>
   <!-- Фон: размытая обложка + градиент из её цветов -->
@@ -73,13 +73,36 @@
 
   <div id="dock" class="dock" hidden>
     <div id="mini" class="mini" role="button" tabindex="0" aria-label="Открыть плеер">
-      <img id="miniCover" alt="">
-      <div class="mini-text">
-        <div id="miniTitle" class="mini-title">Ничего не играет</div>
-        <div id="miniSub" class="mini-sub"></div>
+      <div class="mini-left">
+        <img id="miniCover" alt="">
+        <div class="mini-text">
+          <div id="miniTitle" class="mini-title">Ничего не играет</div>
+          <div id="miniSub" class="mini-sub"></div>
+        </div>
+        <button class="icon-btn small desk" id="dLike" type="button" aria-label="Нравится" data-icon="heart"></button>
       </div>
-      <button class="icon-btn small" id="miniDevice" type="button" aria-label="Где играть" data-icon="speaker"></button>
-      <button class="icon-btn" id="miniPlay" type="button" aria-label="Играть" data-icon="play"></button>
+      <!-- На компьютере: полноценный плеер внизу, как в Spotify -->
+      <div class="mini-center">
+        <div class="mini-ctrls">
+          <button class="icon-btn small desk" id="dShuffle" type="button" aria-label="Перемешать" data-icon="shuffle"></button>
+          <button class="icon-btn small desk" id="dPrev" type="button" aria-label="Назад" data-icon="prev"></button>
+          <button class="icon-btn" id="miniPlay" type="button" aria-label="Играть" data-icon="play"></button>
+          <button class="icon-btn small desk" id="dNext" type="button" aria-label="Вперёд" data-icon="next"></button>
+          <button class="icon-btn small desk" id="dRepeat" type="button" aria-label="Повтор" data-icon="repeat"></button>
+        </div>
+        <div class="mini-seek desk">
+          <span id="dCur">0:00</span>
+          <input type="range" id="dSeek" min="0" max="1000" value="0" aria-label="Перемотка">
+          <span id="dDur">0:00</span>
+        </div>
+      </div>
+      <div class="mini-right">
+        <button class="icon-btn small desk" id="dLyrics" type="button" aria-label="Текст песни" data-icon="lyrics"></button>
+        <button class="icon-btn small desk" id="dQueue" type="button" aria-label="Очередь" data-icon="queue"></button>
+        <button class="icon-btn small" id="miniDevice" type="button" aria-label="Где играть" data-icon="speaker"></button>
+        <span class="desk mini-vol"><span data-icon="volume"></span><input type="range" id="dVol" min="0" max="100" value="70" aria-label="Громкость"></span>
+        <button class="icon-btn small desk" id="dExpand" type="button" aria-label="Развернуть" data-icon="expand"></button>
+      </div>
       <div class="mini-progress"><i id="miniBar"></i></div>
     </div>
     <nav class="tabbar">
@@ -88,6 +111,10 @@
       <button type="button" data-tab="library"><span data-icon="library"></span>Медиатека</button>
     </nav>
   </div>
+
+  <!-- На компьютере: медиатека слева и «Сейчас играет» справа -->
+  <aside id="sidebar" class="sidebar" hidden></aside>
+  <aside id="rpanel" class="rpanel" hidden></aside>
 
   <!-- Плеер: на телефоне выезжает поверх главного экрана -->
   <main id="player" class="screen player" hidden>
@@ -177,6 +204,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=35"></script>
+  <script src="app.js?v=36"></script>
 </body>
 </html>

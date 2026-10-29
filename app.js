@@ -903,6 +903,7 @@ function render(s, fresh) {
   updateContext(s);
   pushWidget();
   updateMini();
+  updateDeskBar();
   updateProgress(true);
 }
 
@@ -1192,6 +1193,7 @@ async function retryWake() {
 }
 
 function onTrackChange(item) {
+  setTimeout(renderRPanel, 600);
   ui.trackUri = item.uri;
   const title = item.name || '—';
   const artist = itemArtists(item);
@@ -1294,6 +1296,7 @@ function updateContext(s) {
 
 function setLiked(v, animate) {
   ui.liked = v;
+  if (typeof updateDeskBar === 'function') updateDeskBar();
   const b = $('#btnLike');
   setIcon(b, v ? 'heartFill' : 'heart');
   b.classList.toggle('on', v);
@@ -1317,11 +1320,13 @@ function updateProgress(force) {
       seek.value = v;
       seek.style.setProperty('--p', v / 10 + '%');
       if (hubMode()) $('#miniBar').style.width = v / 10 + '%';
+      if (isDesk() && !ui.deskSeeking) { $('#dSeek').value = v; $('#dSeek').style.setProperty('--p', v / 10 + '%'); }
     }
     const sec = Math.floor(pos / 1000);
     if (force || sec !== ui.lastSec) {
       ui.lastSec = sec;
       $('#tCur').textContent = fmtTime(pos);
+      if (isDesk() && !ui.deskSeeking) $('#dCur').textContent = fmtTime(pos);
       $('#tDur').textContent = fmtTime(dur);
     }
   }
@@ -2244,6 +2249,123 @@ async function likedPool(limit = 300) {
   return out;
 }
 
+/* ---------- Компьютер: раскладка как в Spotify для ПК ----------
+   Слева медиатека, в центре главная и плейлисты, справа «Сейчас играет»,
+   внизу плеер на всю ширину с перемоткой и громкостью. Включается на экранах от 1100px. */
+const DESK_MQ = matchMedia('(min-width: 1100px)');
+const desk = { queueAt: 0, queueFor: null, volTimer: 0 };
+
+function isDesk() { return DESK_MQ.matches && hubMode(); }
+
+// Открыть страницу в центре (из боковой панели)
+function openInHub(view) {
+  if (playerOpen()) collapsePlayer();
+  if (nav.stack.length > 1 && history.state?.hub) quietBack();
+  nav.stack = [TAB_VIEWS[nav.tab]()];
+  hubPush(view);
+}
+
+async function renderSidebar() {
+  const sb = $('#sidebar');
+  if (!sb || !api) return;
+  const navBtn = (tab, iconName, label) => el('button', { class: 'sb-nav' + (nav.tab === tab ? ' active' : ''), type: 'button', html: icon(iconName) + label, onclick: () => { setTab(tab); renderSidebar(); } });
+  const list = el('div', { class: 'sb-list' },
+    row({ iconName: 'heartFill', iconClass: 'liked', title: 'Любимые треки', sub: 'Плейлист', onClick: () => openInHub(likedView()) }));
+  sb.replaceChildren(
+    el('div', { class: 'sb-card' }, navBtn('home', 'home', 'Главная'), navBtn('search', 'search', 'Поиск')),
+    el('div', { class: 'sb-card sb-lib' },
+      el('div', { class: 'sb-head' }, el('span', { html: icon('library') + 'Твоя медиатека' }),
+        el('button', { class: 'icon-btn small', type: 'button', 'aria-label': 'Статистика', html: icon('stats'), onclick: () => openInHub(statsView()) })),
+      list));
+  try {
+    for (let o = 0; o < 200; o += 50) {
+      const r = await api.playlists(o);
+      for (const p of (r?.items || []).filter(Boolean)) {
+        list.append(row({ img: pickImage(p.images, 64), iconName: 'music', title: p.name, sub: 'Плейлист · ' + (p.owner?.display_name || ''),
+          current: ui.pb?.context?.uri === p.uri, onClick: () => openInHub(playlistView(p)) }));
+      }
+      if (!r?.next) break;
+    }
+  } catch {}
+}
+
+async function renderRPanel() {
+  const rp = $('#rpanel');
+  if (!rp || !isDesk()) return;
+  const item = ui.pb?.item;
+  if (!item) { rp.replaceChildren(el('div', { class: 'rp-empty' }, 'Ничего не играет')); return; }
+  const img = pickImage(itemImages(item), 640);
+  const a = item.artists?.find((x) => x.id);
+  const up = el('div', { class: 'list' }, loader());
+  rp.replaceChildren(
+    el('div', { class: 'rp-head' }, ui.contextNames.get(ui.pb?.context?.uri) || $('#contextName').textContent || 'Сейчас играет'),
+    img ? el('img', { class: 'rp-cover', src: img, alt: '', onclick: expandPlayer }) : null,
+    el('div', { class: 'rp-title' }, item.name),
+    el('button', { class: 'rp-artist', type: 'button', onclick: () => a && openInHub(artistView(a)) }, itemArtists(item)),
+    el('div', { class: 'rp-card' }, el('div', { class: 'rp-card-head' }, el('span', {}, 'Далее в очереди'),
+      el('button', { class: 'rp-link', type: 'button', onclick: () => openSheet(queueView()) }, 'Открыть очередь')), up));
+  // Очередь спрашиваем не чаще раза в 20 секунд и только при смене трека
+  if (desk.queueFor === item.uri && Date.now() - desk.queueAt < 20000 && desk.queue) { fillUp(up, desk.queue); return; }
+  desk.queueFor = item.uri;
+  desk.queueAt = Date.now();
+  try { desk.queue = ((await api.queue())?.queue || []).filter(Boolean).slice(0, 6); } catch { desk.queue = []; }
+  fillUp(up, desk.queue);
+}
+
+function fillUp(up, items) {
+  up.replaceChildren(...(items.length ? items.map((t) => {
+    const why = smart.recs.get(t.uri);
+    return trackRow(t, null, false, why ? '✦ ' + why : undefined);
+  }) : [note('Очередь пуста')]));
+}
+
+// Нижний плеер на компьютере: кнопки, перемотка, громкость
+function updateDeskBar() {
+  if (!isDesk()) return;
+  const s = ui.pb;
+  $('#dShuffle').classList.toggle('on', !!s?.shuffle_state || smart.on);
+  setIcon($('#dShuffle'), smart.on ? 'sparkle' : 'shuffle');
+  const rep = s?.repeat_state || 'off';
+  setIcon($('#dRepeat'), rep === 'track' ? 'repeat1' : 'repeat');
+  $('#dRepeat').classList.toggle('on', rep !== 'off');
+  setIcon($('#dLike'), ui.liked ? 'heartFill' : 'heart');
+  $('#dLike').classList.toggle('on', ui.liked);
+  $('#dDur').textContent = fmtTime(s?.item?.duration_ms || 0);
+  if (s?.device?.volume_percent != null && document.activeElement !== $('#dVol')) $('#dVol').value = s.device.volume_percent;
+}
+
+function bindDesk() {
+  $('#dShuffle').addEventListener('click', (e) => { e.stopPropagation(); toggleShuffle(); });
+  $('#dPrev').addEventListener('click', (e) => { e.stopPropagation(); skip(-1); });
+  $('#dNext').addEventListener('click', (e) => { e.stopPropagation(); skip(1); });
+  $('#dRepeat').addEventListener('click', (e) => { e.stopPropagation(); cycleRepeat(); });
+  $('#dLike').addEventListener('click', (e) => { e.stopPropagation(); toggleLike(false); });
+  $('#dQueue').addEventListener('click', (e) => { e.stopPropagation(); openSheet(queueView()); });
+  $('#dExpand').addEventListener('click', (e) => { e.stopPropagation(); expandPlayer(); });
+  $('#dLyrics').addEventListener('click', (e) => { e.stopPropagation(); expandPlayer(); toggleLyrics(true); });
+  const seek = $('#dSeek');
+  seek.addEventListener('click', (e) => e.stopPropagation());
+  seek.addEventListener('pointerdown', (e) => { e.stopPropagation(); ui.deskSeeking = true; });
+  seek.addEventListener('input', () => {
+    const dur = ui.pb?.item?.duration_ms || 0;
+    $('#dCur').textContent = fmtTime(dur * seek.value / 1000);
+    seek.style.setProperty('--p', seek.value / 10 + '%');
+  });
+  seek.addEventListener('change', () => {
+    ui.deskSeeking = false;
+    const ms = (ui.pb?.item?.duration_ms || 0) * seek.value / 1000;
+    command(() => api.seek(ms), (s) => { s.progress_ms = ms; });
+  });
+  const vol = $('#dVol');
+  vol.addEventListener('click', (e) => e.stopPropagation());
+  vol.addEventListener('input', () => {
+    vol.style.setProperty('--p', vol.value + '%');
+    clearTimeout(desk.volTimer);
+    desk.volTimer = setTimeout(() => api.volume(Number(vol.value)).catch((e) => handleError(e, false)), 250);
+  });
+  DESK_MQ.addEventListener('change', () => { if (isDesk()) { renderSidebar(); renderRPanel(); updateDeskBar(); } });
+}
+
 /* ---------- Главный экран и мини-плеер (как в Spotify) ----------
    Главная, поиск и медиатека открываются на самом экране; плеер свёрнут в полоску внизу
    и выезжает по нажатию. Настройки, устройства и очередь — по-прежнему шторками. */
@@ -2287,6 +2409,7 @@ function setTab(tab) {
   nav.stack = [TAB_VIEWS[tab]()];
   hubRender();
   if (playerOpen()) collapsePlayer();
+  document.querySelectorAll('.sb-nav').forEach((b) => b.classList.toggle('active', b.textContent === { home: 'Главная', search: 'Поиск', library: 'Медиатека' }[tab]));
 }
 
 function refreshView() { if (sheet.open || !hubMode()) renderView(); else hubRender(); }
@@ -2314,13 +2437,18 @@ function enterHub() {
   p.prepend($('#bg')); // фон из обложки теперь у выезжающего плеера
   p.classList.add('overlay');
   // На большом экране (планшет, компьютер) сразу показываем плеер
-  if (WIDE_MQ.matches) p.classList.add('open');
+  if (WIDE_MQ.matches && !DESK_MQ.matches) p.classList.add('open');
+  $('#sidebar').hidden = false;
+  $('#rpanel').hidden = false;
+  renderSidebar();
   nav.stack = [TAB_VIEWS[nav.tab]()];
   hubRender();
 }
 
 function leaveHub() {
   document.body.classList.remove('hub-mode');
+  $('#sidebar').hidden = true;
+  $('#rpanel').hidden = true;
   $('#hub').hidden = true;
   $('#dock').hidden = true;
   const p = $('#player');
@@ -2351,7 +2479,12 @@ function bindHub() {
   $('#hubBack').addEventListener('click', hubBack);
   $('#hubMenu').addEventListener('click', () => openSheet(settingsView()));
   document.querySelectorAll('.tabbar button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
-  $('#mini').addEventListener('click', expandPlayer);
+  $('#mini').addEventListener('click', (e) => {
+    if (e.target.closest('button, input')) return;
+    if (isDesk() && !e.target.closest('.mini-left')) return;
+    expandPlayer();
+  });
+  bindDesk();
   $('#mini').addEventListener('keydown', (e) => { if (e.key === 'Enter') expandPlayer(); });
   $('#miniPlay').addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
   $('#miniDevice').addEventListener('click', (e) => { e.stopPropagation(); openDevices(); });

@@ -797,3 +797,84 @@ body.canvas .art.paused::before { animation-play-state: paused; }
 .new-tag { color: var(--accent); }
 .explicit { display: inline-grid; place-items: center; width: 15px; height: 15px; margin-right: 5px; border-radius: 3px; background: var(--text-3); color: var(--bg2); font-size: 10px; font-weight: 800; vertical-align: 1px; }
 .row.is-new .row-sub { color: var(--accent); }
+
+/* ---------- Мини-плеер: телефон ---------- */
+.mini-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.mini-center, .mini-ctrls, .mini-right { display: flex; align-items: center; }
+.mini-center { order: 3; }
+.mini-right { order: 2; }
+.mini .desk, .sidebar, .rpanel { display: none; }
+
+/* ---------- Компьютер: как Spotify для ПК ---------- */
+@media (min-width: 1100px) {
+  body.hub-mode { --panel: #121016; }
+  body.hub-mode .hub { inset: 8px 376px 96px 316px; border-radius: 12px; overflow: hidden; padding-top: 0; }
+  body.hub-mode .hub-body { max-width: none; padding: 4px 16px 32px; }
+  body.hub-mode .hub-head { max-width: none; padding: 14px 16px 8px 24px; }
+  body.hub-mode .quick-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  body.hub-mode .card { width: 172px; }
+  body.hub-mode .card img, body.hub-mode .card-ph { width: 172px; height: 172px; }
+  body.hub-mode .pl-head { display: grid; grid-template-columns: 220px 1fr; grid-template-rows: 1fr auto auto; align-items: end; gap: 6px 28px; padding: 24px; }
+  body.hub-mode .pl-head .pl-cover { width: 220px; margin: 0; grid-row: 1 / span 3; }
+  body.hub-mode .pl-head .pl-actions { grid-column: 1 / -1; margin-top: 16px; }
+  body.hub-mode .pl-title { font-size: 44px; }
+  body.hub-mode .chips { display: none; }
+
+  body.hub-mode .sidebar:not([hidden]) {
+    position: fixed; left: 8px; top: 8px; bottom: 96px; width: 300px; z-index: 2;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .sb-card { background: var(--panel); border-radius: 12px; padding: 8px; }
+  .sb-nav { display: flex; align-items: center; gap: 16px; width: 100%; padding: 10px 14px; border-radius: 8px; font-size: 15px; font-weight: 700; color: var(--text-2); }
+  .sb-nav svg { width: 24px; height: 24px; }
+  .sb-nav.active, .sb-nav:hover { color: var(--text); }
+  .sb-lib { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .sb-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 10px 14px; color: var(--text-2); font-weight: 700; }
+  .sb-head span { display: flex; align-items: center; gap: 12px; }
+  .sb-head svg { width: 22px; height: 22px; }
+  .sb-list { overflow-y: auto; flex: 1; }
+  .sb-list .row { padding: 6px 8px; }
+  .sb-list .thumb, .sb-list .thumb-icon { width: 46px; height: 46px; border-radius: 6px; }
+  .sb-list .row:hover { background: var(--glass); }
+
+  body.hub-mode .rpanel:not([hidden]) {
+    position: fixed; right: 8px; top: 8px; bottom: 96px; width: 360px; z-index: 2;
+    display: flex; flex-direction: column; gap: 10px; padding: 16px; overflow-y: auto;
+    background: var(--panel); border-radius: 12px;
+  }
+  .rp-head { font-weight: 800; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rp-cover { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; cursor: pointer; box-shadow: 0 20px 40px -18px rgba(0, 0, 0, 0.7); }
+  .rp-title { font-size: 22px; font-weight: 800; letter-spacing: -0.01em; }
+  .rp-artist { align-self: flex-start; color: var(--text-2); font-size: 15px; font-weight: 600; text-align: left; }
+  .rp-artist:hover { color: var(--text); text-decoration: underline; }
+  .rp-card { margin-top: 6px; padding: 12px 6px 6px; border-radius: 10px; background: rgba(255, 255, 255, 0.05); }
+  .rp-card-head { display: flex; justify-content: space-between; align-items: center; padding: 0 8px 6px; font-weight: 800; }
+  .rp-link { font-size: 13px; color: var(--text-2); font-weight: 700; }
+  .rp-link:hover { color: var(--text); }
+  .rp-card .row { padding: 6px 8px; }
+  .rp-card .thumb { width: 44px; height: 44px; border-radius: 6px; }
+  .rp-empty { margin: auto; color: var(--text-3); }
+
+  /* Нижний плеер на всю ширину */
+  body.hub-mode .dock { height: 88px; padding: 0 16px; background: #000; display: flex; align-items: center; }
+  body.hub-mode .tabbar { display: none; }
+  body.hub-mode .mini {
+    display: grid; grid-template-columns: minmax(180px, 1fr) minmax(360px, 1.6fr) minmax(180px, 1fr); gap: 16px;
+    width: 100%; max-width: none; height: 88px; margin: 0; padding: 0; background: transparent; box-shadow: none; border-radius: 0; cursor: default;
+  }
+  body.hub-mode .mini .desk { display: inline-flex; }
+  body.hub-mode .mini-left { cursor: pointer; }
+  body.hub-mode .mini img { width: 56px; height: 56px; border-radius: 6px; }
+  body.hub-mode .mini-center { order: 0; flex-direction: column; gap: 4px; }
+  body.hub-mode .mini-right { order: 0; justify-content: flex-end; gap: 2px; }
+  body.hub-mode .mini-ctrls { gap: 10px; }
+  body.hub-mode #miniPlay { width: 38px; height: 38px; background: var(--text); color: #000; border-radius: 50%; }
+  body.hub-mode #miniPlay svg { width: 20px; height: 20px; }
+  body.hub-mode .mini .icon-btn.on { color: var(--accent); }
+  body.hub-mode .mini-seek { display: flex; align-items: center; gap: 10px; width: 100%; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  body.hub-mode .mini-seek input, body.hub-mode .mini-vol input { flex: 1; accent-color: var(--text); height: 4px; }
+  body.hub-mode .mini-vol { align-items: center; gap: 6px; width: 140px; color: var(--text-2); }
+  body.hub-mode .mini-vol svg { width: 18px; height: 18px; flex: none; }
+  body.hub-mode .mini-progress { display: none; }
+  body.hub-mode.hub-mode .toast { bottom: 110px; }
+}
