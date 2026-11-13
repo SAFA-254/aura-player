@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
-  <link rel="stylesheet" href="style.css?v=37">
+  <link rel="stylesheet" href="style.css?v=38">
 </head>
 <body>
   <!-- Фон: размытая обложка + градиент из её цветов -->
@@ -118,6 +118,9 @@
 
   <!-- Плеер: на телефоне выезжает поверх главного экрана -->
   <main id="player" class="screen player" hidden>
+    <!-- Большой экран: огромное название на фоне и стеклянная панель снизу -->
+    <div class="np-giant" id="npGiant" aria-hidden="true"></div>
+    <div class="np-dock" aria-hidden="true"></div>
     <header class="top">
       <button class="icon-btn" id="btnLibrary" type="button" aria-label="Свернуть плеер" data-icon="chevronDown"></button>
       <div class="top-title">
@@ -152,6 +155,8 @@
     </div>
 
     <div class="progress">
+      <!-- Большой экран: перемотка в виде звуковой волны -->
+      <div class="wave" id="wave" aria-hidden="true"><div class="wave-bars"></div><div class="wave-fill"><div class="wave-bars"></div></div></div>
       <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="Перемотка">
       <div class="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
     </div>
@@ -204,6 +209,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=37"></script>
+  <script src="app.js?v=38"></script>
 </body>
 </html>

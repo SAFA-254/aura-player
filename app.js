@@ -1192,7 +1192,38 @@ async function retryWake() {
   }
 }
 
+/* ---------- Большой экран: волна, 3D-обложка, огромное название ---------- */
+// Рисунок волны свой у каждого трека (из его адреса), чтобы выглядело живо, но не случайно
+function buildWave(uri) {
+  let h = 2166136261;
+  for (const c of uri || 'aura') { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
+  const rnd = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return ((h >>> 0) % 1000) / 1000; };
+  const n = 120, bars = [];
+  for (let i = 0; i < n; i++) {
+    const env = 0.35 + 0.65 * Math.sin(Math.PI * (i + 0.5) / n) ** 0.6; // тише в начале и в конце
+    bars.push(Math.round((0.18 + 0.82 * (rnd() * 0.7 + 0.3) * env) * 100));
+  }
+  const html = bars.map((v) => `<i style="height:${v}%"></i>`).join('');
+  document.querySelectorAll('#wave .wave-bars').forEach((w) => { w.innerHTML = html; });
+}
+
+function bindTilt() {
+  const area = $('.art-area'), art = $('#art');
+  area.addEventListener('pointermove', (e) => {
+    if (!WIDE_MQ.matches || e.pointerType !== 'mouse' || art.classList.contains('dragging')) return;
+    const r = art.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width - 0.5, y = (e.clientY - r.top) / r.height - 0.5;
+    art.style.setProperty('--ry', (x * 14).toFixed(2) + 'deg');
+    art.style.setProperty('--rx', (-y * 14).toFixed(2) + 'deg');
+    art.style.setProperty('--gx', ((x + 0.5) * 100).toFixed(1) + '%');
+    art.style.setProperty('--gy', ((y + 0.5) * 100).toFixed(1) + '%');
+  });
+  area.addEventListener('pointerleave', () => { art.style.setProperty('--rx', '0deg'); art.style.setProperty('--ry', '0deg'); });
+}
+
 function onTrackChange(item) {
+  buildWave(item.uri);
+  $('#npGiant').textContent = item.name || '';
   setTimeout(renderRPanel, 600);
   ui.trackUri = item.uri;
   const title = item.name || '—';
@@ -1319,6 +1350,7 @@ function updateProgress(force) {
       ui.lastV = v;
       seek.value = v;
       seek.style.setProperty('--p', v / 10 + '%');
+      if (WIDE_MQ.matches) $('#wave').style.setProperty('--p', v / 10 + '%');
       if (hubMode()) $('#miniBar').style.width = v / 10 + '%';
       if (isDesk() && !ui.deskSeeking) { $('#dSeek').value = v; $('#dSeek').style.setProperty('--p', v / 10 + '%'); }
     }
@@ -1356,7 +1388,7 @@ function updateDeviceChip() {
   // Наушники показываем, только когда музыка играет на этом телефоне
   const h = hp.cur && (!d || d.type === 'Smartphone' || d.id === local.deviceId) ? hp.cur : null;
   setIcon($('#deviceIcon'), h ? (/buds|pods|wf-|ear/i.test(h.name) ? 'earbuds' : 'headphones') : 'speaker');
-  $('#deviceName').textContent = h ? headphonesLabel(h) : d && d.id === local.deviceId ? 'Aura' : d?.name || 'Устройство';
+  $('#deviceName').textContent = h ? headphonesLabel(h) : d && d.id === local.deviceId ? 'Aura' : d?.name ? cleanDeviceName(d.name) : 'Устройство';
   $('#btnDevices').classList.toggle('low', !!h && h.battery != null && h.battery <= 15);
 }
 
@@ -4128,6 +4160,8 @@ function bindUI() {
   });
 
   bindArtGestures();
+  bindTilt();
+  $('#seek').addEventListener('input', () => $('#wave').style.setProperty('--p', $('#seek').value / 10 + '%'));
   bindPlayerSwipes();
   bindSheetDrag();
 }
