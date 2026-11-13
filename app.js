@@ -1192,6 +1192,92 @@ async function retryWake() {
   }
 }
 
+/* ---------- Караоке: строка «закрашивается» по мере того, как её поют ----------
+   Если в тексте есть разметка по словам (<мм:сс.xx> перед словами) — по словам, иначе по времени строки. */
+let karaokeAt = 0;
+function karaokeTick() {
+  if (!lyr.lines || lyr.idx < 0 || (!lyricsVisible() && !party.on)) return;
+  const now = performance.now();
+  if (now - karaokeAt < 40) return;
+  karaokeAt = now;
+  const line = lyr.lines[lyr.idx], next = lyr.lines[lyr.idx + 1];
+  const pos = currentPos() + 300;
+  let k;
+  if (line.words?.length) {
+    let w = 0;
+    while (w + 1 < line.words.length && line.words[w + 1].t <= pos) w++;
+    const wEnd = line.words[w + 1]?.t ?? next?.t ?? line.words[w].t + 600;
+    const inWord = Math.min(1, Math.max(0, (pos - line.words[w].t) / Math.max(1, wEnd - line.words[w].t)));
+    k = (line.words[w].from + (line.words[w].len * inWord)) / Math.max(1, line.text.length);
+  } else {
+    // Без разметки: строку поют примерно 300 мс на слог, но не дольше, чем до следующей строки
+    const span = Math.min((next?.t ?? line.t + 5000) - line.t, Math.max(1500, line.text.length * 95));
+    k = (pos - line.t) / Math.max(1, span);
+  }
+  const pct = Math.round(Math.min(1, Math.max(0, k)) * 1000) / 10 + '%';
+  $('#lyricsInner').children[lyr.idx]?.style.setProperty('--k', pct);
+  if (party.on) $('#partyLine').style.setProperty('--k', pct);
+}
+
+/* ---------- Режим «Вечеринка»: на весь экран, под ритм ---------- */
+const party = { on: false, idx: -2 };
+
+function openParty() {
+  party.on = true;
+  party.idx = -2;
+  const item = ui.pb?.item;
+  const img = item ? pickImage(itemImages(item), 640) : '';
+  let p = $('#party');
+  if (!p) {
+    p = el('div', { id: 'party', class: 'party', role: 'dialog', 'aria-label': 'Вечеринка' },
+      el('div', { class: 'party-bg' }),
+      el('div', { class: 'party-disc' }, el('img', { id: 'partyCover', alt: '' })),
+      el('div', { class: 'party-title', id: 'partyTitle' }),
+      el('div', { class: 'party-artist', id: 'partyArtist' }),
+      el('div', { class: 'party-line', id: 'partyLine' }),
+      el('div', { class: 'party-hint' }, 'Нажми, чтобы выйти · включи визуализатор «Микрофон», и всё запульсирует в такт'));
+    p.addEventListener('click', closeParty);
+    document.body.append(p);
+  }
+  updateParty();
+  p.hidden = false;
+  requestAnimationFrame(() => p.classList.add('show'));
+  document.documentElement.requestFullscreen?.().catch(() => {});
+  loadLyrics();
+  history.pushState({ party: true }, '');
+}
+
+function closeParty(fromPop) {
+  if (!party.on) return;
+  party.on = false;
+  const p = $('#party');
+  p.classList.remove('show');
+  setTimeout(() => { if (!party.on) p.hidden = true; }, 350);
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  if (fromPop !== true && history.state?.party) quietBack();
+}
+
+function updateParty() {
+  if (!party.on) return;
+  const item = ui.pb?.item;
+  const img = item ? pickImage(itemImages(item), 640) : '';
+  const c = $('#partyCover');
+  if (img && c.getAttribute('src') !== img) c.src = img;
+  $('#partyTitle').textContent = item?.name || 'Ничего не играет';
+  $('#partyArtist').textContent = item ? itemArtists(item) : '';
+  $('#party').classList.toggle('paused', !ui.pb?.is_playing);
+  if (party.idx !== lyr.idx || lyr.uri !== ui.trackUri) {
+    party.idx = lyr.idx;
+    const line = lyr.uri === ui.trackUri && lyr.lines && lyr.idx >= 0 ? lyr.lines[lyr.idx].text : '';
+    const pl = $('#partyLine');
+    pl.textContent = line || '♪';
+    pl.style.setProperty('--k', '0%');
+    pl.classList.remove('pop');
+    void pl.offsetWidth;
+    pl.classList.add('pop');
+  }
+}
+
 /* ---------- Большой экран: волна, 3D-обложка, огромное название ---------- */
 // Рисунок волны свой у каждого трека (из его адреса), чтобы выглядело живо, но не случайно
 function buildWave(uri) {
@@ -1223,6 +1309,13 @@ function bindTilt() {
 
 function onTrackChange(item) {
   buildWave(item.uri);
+  // Винил: пластинка «опускается» на проигрыватель
+  if (settings.theme === 'vinyl') {
+    const art = $('#art');
+    art.classList.remove('drop');
+    void art.offsetWidth;
+    art.classList.add('drop');
+  }
   $('#npGiant').textContent = item.name || '';
   setTimeout(renderRPanel, 600);
   ui.trackUri = item.uri;
@@ -1367,6 +1460,8 @@ function updateProgress(force) {
 function progressLoop() {
   updateProgress(false);
   syncLyrics();
+  karaokeTick();
+  if (party.on) updateParty();
   updateClock();
   ui.raf = requestAnimationFrame(progressLoop);
 }
@@ -2018,6 +2113,7 @@ function closeSheet(fromPop) {
 // Кнопка/жест «назад» на Android закрывает шторку, а не приложение
 window.addEventListener('popstate', () => {
   if (nav.ignorePop) { nav.ignorePop = false; return; }
+  if (party.on) { closeParty(true); return; }
   if (sheet.open) {
     if (sheet.stack.length > 1) {
       popView();
@@ -2886,6 +2982,7 @@ function trackActionsView(t, current = false) {
         t.album?.id ? act('disc', 'Альбом: ' + t.album.name, () => { closeSheet(); pushView(albumView(t.album)); }) : null,
         id ? act('share', 'Поделиться ссылкой', () => { closeSheet(); shareLink('https://open.spotify.com/track/' + id, t.name); }) : null,
         current ? act('share', 'Поделиться карточкой', () => { closeSheet(); shareCard(); }) : null,
+        current ? act('expand', '🎉 Режим «Вечеринка» на весь экран', () => { closeSheet(); openParty(); }) : null,
       ));
     },
   };
@@ -3208,6 +3305,7 @@ function settingsView() {
           updateWakeLock();
         }),
         el('button', { class: 'btn-ghost', type: 'button', html: icon('expand') + 'Полный экран', onclick: toggleFullscreen }),
+        el('button', { class: 'btn-ghost', type: 'button', html: icon('music') + '🎉 Режим «Вечеринка»', onclick: () => { closeSheet(); openParty(); } }),
         el('p', { style: 'margin-top:10px;font-size:13px' }, 'Поверни планшет или открой Aura на компьютере — включится режим большого экрана с часами и текстом песни.')));
 
       const install = el('div', { class: 'settings-card' },
@@ -3327,7 +3425,7 @@ function bindPlayerSwipes() {
 const WIDE_MQ = matchMedia('(min-width: 900px) and (orientation: landscape)');
 const lyr = { uri: null, data: null, lines: null, idx: -1, loading: null, userScrollAt: 0, cache: new Map() };
 
-function lyricsVisible() { return !!api && ($('#player').classList.contains('lyrics-mode') || WIDE_MQ.matches); }
+function lyricsVisible() { return !!api && ($('#player').classList.contains('lyrics-mode') || WIDE_MQ.matches || party.on); }
 
 function lyricsTrackChanged(item) {
   lyr.uri = item.uri;
@@ -3404,8 +3502,21 @@ function parseLRC(text) {
   for (const raw of text.split('\n')) {
     const tags = [...raw.matchAll(/\[(\d+):(\d+(?:[.:]\d+)?)\]/g)];
     if (!tags.length) continue;
-    const words = raw.replace(/\[[^\]]*\]/g, '').trim();
-    for (const t of tags) out.push({ t: (Number(t[1]) * 60 + Number(t[2].replace(':', '.'))) * 1000, text: words });
+    const body = raw.replace(/\[[^\]]*\]/g, '');
+    // Разметка по словам (<мм:сс.xx>слово) — для караоке
+    const wordTags = [...body.matchAll(/<(\d+):(\d+(?:\.\d+)?)>([^<]*)/g)];
+    const words = body.replace(/<[^>]*>/g, '').trim();
+    let wl = null;
+    if (wordTags.length > 1) {
+      let from = 0;
+      wl = wordTags.map((w) => {
+        const txt = w[3];
+        const item = { t: (Number(w[1]) * 60 + Number(w[2])) * 1000, from, len: txt.length };
+        from += txt.length;
+        return item;
+      });
+    }
+    for (const t of tags) out.push({ t: (Number(t[1]) * 60 + Number(t[2].replace(':', '.'))) * 1000, text: words, words: wl });
   }
   return out.sort((a, b) => a.t - b.t);
 }
@@ -3768,7 +3879,15 @@ function drawViz(now) {
   viz.level += ((ui.pb?.is_playing ? 1 : 0.05) - viz.level) * 0.05;
   const t = performance.now() / 1000;
   const mic = viz.mode === 'mic' && viz.analyser;
-  if (mic) viz.analyser.getByteFrequencyData(viz.data);
+  if (mic) {
+    viz.analyser.getByteFrequencyData(viz.data);
+    // Басы → переменная --beat: свечение обложки и «Вечеринка» пульсируют в такт
+    let bass = 0;
+    for (let k = 1; k < 7; k++) bass += viz.data[k];
+    bass /= 6 * 255;
+    viz.beat = Math.max(bass ** 2.2, (viz.beat || 0) * 0.86);
+    document.documentElement.style.setProperty('--beat', viz.beat.toFixed(3));
+  }
   x.fillStyle = viz.accent;
   for (let i = 0; i < n; i++) {
     let v;
