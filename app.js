@@ -139,6 +139,7 @@ const ICONS = {
   search: ['s', '<circle cx="11" cy="11" r="7"/><path d="m20.5 20.5-4.5-4.5"/>'],
   library: ['s', '<path d="M4.5 4v16M9.5 4v16"/><path d="m14 4.6 5.5 15"/>'],
   home: ['s', '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9v11h5v-6h4v6h5V9"/>'],
+  mic: ['s', '<rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/>'],
   chevronDown: ['s', '<path d="m6 9 6 6 6-6"/>'],
   sparkle: ['f', '<path d="M12 2.5c.4 3.9 1.8 6.6 4.2 8.1 1.3.8 2.9 1.2 4.8 1.4-3.9.4-6.6 1.8-8.1 4.2-.8 1.3-1.2 2.9-1.4 4.8-.4-3.9-1.8-6.6-4.2-8.1-1.3-.8-2.9-1.2-4.8-1.4 3.9-.4 6.6-1.8 8.1-4.2.8-1.3 1.2-2.9 1.4-4.8z"/>'],
   more: ['f', '<circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/>'],
@@ -1308,6 +1309,7 @@ function bindTilt() {
 }
 
 function onTrackChange(item) {
+  rememberPlay(item);
   buildWave(item.uri);
   // Винил: пластинка «опускается» на проигрыватель
   if (settings.theme === 'vinyl') {
@@ -2606,6 +2608,7 @@ function updateMini() {
 function bindHub() {
   $('#hubBack').addEventListener('click', hubBack);
   $('#hubMenu').addEventListener('click', () => openSheet(settingsView()));
+  $('#hubVoice').addEventListener('click', startVoice);
   document.querySelectorAll('.tabbar button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
   $('#mini').addEventListener('click', (e) => {
     if (e.target.closest('button, input')) return;
@@ -2677,12 +2680,13 @@ async function recentContexts() {
 
 async function loadHome(force) {
   if (!force && home.data && Date.now() - home.at < 5 * 60e3) return home.data;
-  const [recent, artists, lists] = await Promise.all([
+  const [recent, artists, lists, classics] = await Promise.all([
     recentContexts(),
     api.topItems('artists', 'short_term').then((r) => r?.items || []).catch(() => []),
     api.playlists(0).then((r) => (r?.items || []).filter(Boolean)).catch(() => []),
+    api.topItems('tracks', 'long_term').then((r) => (r?.items || []).slice(0, 15)).catch(() => []),
   ]);
-  home.data = { recent, artists, lists };
+  home.data = { recent, artists, lists, classics };
   home.at = Date.now();
   return home.data;
 }
@@ -2733,7 +2737,24 @@ function homeView() {
         const more = d.recent.filter((c) => !used.has(c.key));
         box.replaceChildren(
           el('div', { class: 'quick-grid' }, ...tiles),
+          shelf('Сделано для тебя', [
+            el('button', { class: 'card mix-card', type: 'button', onclick: () => playDaily() },
+              el('div', { class: 'card-ph mix-art daily', html: icon('sparkle') + '<b>Aura<br>дня</b>' }),
+              el('div', { class: 'card-title' }, '✦ Aura дня'), el('div', { class: 'card-sub' }, 'Новый микс каждый день: любимое + новое')),
+            ...MOODS.map((m) => el('button', { class: 'card mix-card', type: 'button', onclick: () => playMood(m) },
+              el('div', { class: 'card-ph mix-art', style: `background:linear-gradient(135deg, ${m.colors[0]}, ${m.colors[1]})`, html: `<span class="mix-emoji">${m.emoji}</span><b>${m.name}</b>` }),
+              el('div', { class: 'card-title' }, m.name), el('div', { class: 'card-sub' }, m.sub))),
+          ]),
           shelf('Слушаем дальше?', (more.length ? more : d.recent).map((c) => card({ ...c, onClick: c.open }))),
+          (() => {
+            const tm = timeMachine();
+            if (tm) {
+              return shelf('⏳ ' + tm.title, tm.items.map((x, i) => card({ img: x.i, title: x.n, sub: x.a,
+                onClick: () => playMix('⏳ ' + tm.title, tm.items.slice(i).map((y) => ({ uri: y.u }))) })));
+            }
+            return d.classics?.length ? shelf('⏳ Твоя классика', d.classics.map((t, i) => card({ img: pickImage(itemImages(t), 300), title: t.name, sub: itemArtists(t),
+              onClick: () => playMix('⏳ Твоя классика', d.classics.slice(i)) }))) : null;
+          })(),
           shelf('Твои артисты', d.artists.slice(0, 12).map((a) => card({
             img: pickImage(a.images, 300), title: a.name, sub: 'Артист', round: true, iconName: 'user',
             onClick: () => pushView(artistView(a)),
@@ -2983,6 +3004,8 @@ function trackActionsView(t, current = false) {
         id ? act('share', 'Поделиться ссылкой', () => { closeSheet(); shareLink('https://open.spotify.com/track/' + id, t.name); }) : null,
         current ? act('share', 'Поделиться карточкой', () => { closeSheet(); shareCard(); }) : null,
         current ? act('expand', '🎉 Режим «Вечеринка» на весь экран', () => { closeSheet(); openParty(); }) : null,
+        current ? act('share', '🎬 Видео для сторис (8 секунд)', () => { closeSheet(); shareVideo(); }) : null,
+        current ? act('user', '🎧 Слушать вместе — ссылка другу', () => { closeSheet(); shareTogether(); }) : null,
       ));
     },
   };
@@ -3010,11 +3033,298 @@ async function saveSmartMix() {
   if (!list.length) { toast('Сначала включи умное перемешивание'); return; }
   try {
     const d = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
-    const p = await api.createPlaylist('✦ Умный микс · ' + d);
+    const p = await api.createPlaylist(smart.mixName || '✦ Умный микс · ' + d);
     const uris = list.map((t) => t.uri);
     for (let i = 0; i < uris.length; i += 100) await api.addToPlaylist(p.id, uris.slice(i, i + 100));
     toast(`Сохранено: «${p.name}», ${uris.length} ${plural(uris.length, 'трек', 'трека', 'треков')}`);
   } catch (e) { handleError(e, false); }
+}
+
+/* ---------- Микс, который можно сохранить (умный, «Aura дня», настроение) ---------- */
+function setMix(name, list) { smart.mixName = name; smart.list = list; }
+
+async function playMix(name, list) {
+  if (!list.length) return false;
+  const ok = await playOn({ uris: list.map((t) => t.uri) }, false);
+  if (ok) { setMix(name, list); closeSheet(); }
+  return ok;
+}
+
+/* ---------- «Aura дня»: каждый день новый микс, половина любимого, половина нового ---------- */
+function todayKey() { return new Date().toISOString().slice(0, 10); }
+
+async function playDaily() {
+  const name = '✦ Aura дня · ' + new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  const cached = store.get('daily');
+  if (cached?.date === todayKey() && cached.list?.length) {
+    smart.recs = new Map(cached.recs || []);
+    return playMix(name, cached.list);
+  }
+  toast('✦ Собираю «Aura дня»…');
+  const list = await buildSmartMix(await likedPool(), 30);
+  // Компактно, чтобы влезло в память браузера
+  const slim = list.map((t) => ({ uri: t.uri, name: t.name, artists: (t.artists || []).map((a) => ({ name: a.name, id: a.id })), album: { images: (t.album?.images || []).slice(-1) } }));
+  store.set('daily', { date: todayKey(), list: slim, recs: [...smart.recs.entries()] });
+  return playMix(name, slim);
+}
+
+/* ---------- Миксы по настроению: по темпу (BPM) из открытого API Deezer ---------- */
+const MOODS = [
+  { id: 'evening', name: 'Вечер', emoji: '🌙', sub: 'Спокойное, до 95 BPM', min: 40, max: 95, colors: ['#3a2a6b', '#0f1a3d'] },
+  { id: 'focus', name: 'Фокус', emoji: '🎧', sub: 'Ровный темп, 95–112', min: 95, max: 112, colors: ['#11524a', '#0b2530'] },
+  { id: 'road', name: 'Для дороги', emoji: '🚗', sub: 'Драйв, 112–128', min: 112, max: 128, colors: ['#a24a17', '#3d1508'] },
+  { id: 'gym', name: 'Спортзал', emoji: '🔥', sub: 'Энергия, от 128', min: 128, max: 220, colors: ['#9b1236', '#2b0614'] },
+];
+
+async function trackBpm(t, cache) {
+  if (t.uri in cache) return cache[t.uri];
+  const isrc = t.external_ids?.isrc;
+  let bpm = 0;
+  if (isrc) {
+    try { bpm = Math.round((await jsonp('https://api.deezer.com/track/isrc:' + encodeURIComponent(isrc), 6000))?.bpm || 0); } catch {}
+  }
+  cache[t.uri] = bpm;
+  return bpm;
+}
+
+async function playMood(mood) {
+  toast(`${mood.emoji} Подбираю «${mood.name}»…`);
+  const pool = shuffled(await likedPool(400)).slice(0, 200);
+  const cache = store.get('bpm', {});
+  let done = 0;
+  for (let i = 0; i < pool.length; i += 6) {
+    await Promise.all(pool.slice(i, i + 6).map((t) => trackBpm(t, cache)));
+    done = Math.min(pool.length, i + 6);
+    if (done % 36 === 0) toast(`${mood.emoji} Слушаю темп треков: ${done} из ${pool.length}`);
+  }
+  store.set('bpm', cache);
+  // Половинный/двойной темп тоже считаем (85 BPM в «двойном» счёте = 170)
+  const fits = (b) => b && ((b >= mood.min && b < mood.max) || (b * 2 >= mood.min && b * 2 < mood.max && mood.id === 'gym'));
+  const list = pool.filter((t) => fits(cache[t.uri])).slice(0, 50);
+  if (list.length < 6) { toast('Мало треков с известным темпом для этого настроения — попробуй другое'); return false; }
+  smart.recs = new Map();
+  const ok = await playMix(`${mood.emoji} ${mood.name} · Aura`, list);
+  if (ok) toast(`${mood.emoji} «${mood.name}»: ${list.length} ${plural(list.length, 'трек', 'трека', 'треков')}`);
+  return ok;
+}
+
+/* ---------- Машина времени: Aura сама запоминает, что ты слушаешь ---------- */
+function rememberPlay(item) {
+  if (!item?.uri || api?.isDemo) return;
+  const h = store.get('history', []);
+  if (h.length && h[h.length - 1].u === item.uri) return;
+  h.push({ u: item.uri, n: item.name, a: itemArtists(item), i: pickImage(itemImages(item), 300), t: Date.now() });
+  store.set('history', h.slice(-3000));
+}
+
+function timeMachine() {
+  const h = store.get('history', []);
+  const day = 864e5;
+  const periods = [[365, 'Год назад ты слушал'], [30, 'Месяц назад ты слушал'], [7, 'Неделю назад ты слушал']];
+  for (const [d, title] of periods) {
+    const center = Date.now() - d * day, spread = d >= 30 ? 3 * day : day;
+    const items = h.filter((x) => Math.abs(x.t - center) < spread);
+    const uniq = [...new Map(items.map((x) => [x.u, x])).values()];
+    if (uniq.length >= 3) return { title, items: uniq.slice(0, 20) };
+  }
+  return null;
+}
+
+/* ---------- Слушать вместе: ссылка, по которой у друга играет то же, с той же секунды ---------- */
+function shareTogether() {
+  const item = ui.pb?.item;
+  if (!item) { toast('Сначала включи музыку'); return; }
+  const q = new URLSearchParams({ together: item.uri, pos: String(Math.round(currentPos())), at: String(Date.now()), t: item.name, a: itemArtists(item) });
+  shareLink(REDIRECT_URI + '?' + q, `Слушай со мной: ${item.name} — ${itemArtists(item)}`);
+}
+
+// Пришли по ссылке «Слушать вместе» — запоминаем и включаем, как только Aura готова
+function catchTogether() {
+  const q = new URLSearchParams(location.search);
+  if (!q.get('together')) return;
+  store.set('together', { uri: q.get('together'), pos: Number(q.get('pos')) || 0, at: Number(q.get('at')) || Date.now(), t: q.get('t'), a: q.get('a') });
+  history.replaceState(null, '', REDIRECT_URI);
+}
+
+async function runTogether() {
+  const j = store.get('together');
+  if (!j || !api || api.isDemo) return;
+  store.del('together');
+  const pos = j.pos + (Date.now() - j.at);
+  if (Date.now() - j.at > 6 * 3600e3) { toast('Ссылка «Слушать вместе» устарела'); return; }
+  const ok = await playOn({ uris: [j.uri], position_ms: Math.max(0, pos) }, null);
+  if (ok) toast(`🎧 Слушаете вместе: «${j.t || 'трек'}» — с той же секунды`);
+}
+
+/* ---------- Видео для сторис: 8 секунд анимации с обложкой, волной и строчкой текста ---------- */
+async function shareVideo() {
+  const item = ui.pb?.item;
+  if (!item) { toast('Сначала включи музыку'); return; }
+  if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) { toast('Этот браузер не умеет записывать видео'); return; }
+  toast('🎬 Делаю видео… 8 секунд');
+  const W = 720, H = 1280, FPS = 30, SEC = 8;
+  const img = await new Promise((res) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = () => res(null); i.src = pickImage(itemImages(item), 640); });
+  const c = el('canvas', { width: W, height: H });
+  const x = c.getContext('2d');
+  // Размытый фон рисуем один раз
+  const bg = el('canvas', { width: W, height: H });
+  const bx = bg.getContext('2d');
+  bx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg2').trim() || '#120e18';
+  bx.fillRect(0, 0, W, H);
+  if (img) { bx.filter = 'blur(60px) saturate(1.5) brightness(0.7)'; bx.drawImage(img, -300, -100, H + 200, H + 200); bx.filter = 'none'; }
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#fff';
+  const line = lyr.uri === item.uri && lyr.lines && lyr.idx >= 0 ? lyr.lines[lyr.idx].text : '';
+  const bars = Array.from({ length: 48 }, (_, i) => 0.3 + 0.7 * Math.abs(Math.sin(i * 1.7) * Math.cos(i * 0.6)));
+  const wrap = (text, maxW, font) => {
+    x.font = font;
+    const words = text.split(' '), out = [];
+    let cur = '';
+    for (const w of words) { const t = cur ? cur + ' ' + w : w; if (x.measureText(t).width > maxW && cur) { out.push(cur); cur = w; } else cur = t; }
+    if (cur) out.push(cur);
+    return out.slice(0, 3);
+  };
+  const draw = (t) => {
+    const k = t / SEC;
+    x.drawImage(bg, 0, 0);
+    // Обложка: медленно приближается и покачивается
+    const size = 520 * (1 + 0.06 * k), cx = W / 2, cy = 470 + Math.sin(t * 1.4) * 8;
+    x.save();
+    x.shadowColor = 'rgba(0,0,0,0.5)'; x.shadowBlur = 60; x.shadowOffsetY = 30;
+    x.beginPath(); x.roundRect(cx - size / 2, cy - size / 2, size, size, 34); x.closePath();
+    x.fillStyle = '#222'; x.fill();
+    x.shadowColor = 'transparent';
+    x.clip();
+    if (img) x.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+    x.restore();
+    // Волна
+    const bw = 8, gap = 5, total = bars.length * (bw + gap), x0 = (W - total) / 2, by = 860;
+    bars.forEach((b, i) => {
+      const hgt = 14 + 70 * b * (0.55 + 0.45 * Math.abs(Math.sin(t * 3.2 + i * 0.5)));
+      x.fillStyle = i / bars.length < k ? accent : 'rgba(255,255,255,0.35)';
+      x.beginPath(); x.roundRect(x0 + i * (bw + gap), by - hgt / 2, bw, hgt, 4); x.fill();
+    });
+    // Текст
+    x.textAlign = 'center'; x.fillStyle = '#fff';
+    let y = 980;
+    for (const l of wrap(item.name, W - 120, '800 52px Manrope, system-ui, sans-serif')) { x.fillText(l, W / 2, y); y += 60; }
+    x.font = '600 32px Manrope, system-ui, sans-serif'; x.fillStyle = 'rgba(255,255,255,0.75)';
+    x.fillText(itemArtists(item), W / 2, y + 4);
+    if (line) {
+      x.globalAlpha = Math.min(1, t * 1.5);
+      x.font = 'italic 600 30px Manrope, system-ui, sans-serif'; x.fillStyle = '#fff';
+      let ly = 150;
+      for (const l of wrap('«' + line + '»', W - 140, 'italic 600 30px Manrope, system-ui, sans-serif')) { x.fillText(l, W / 2, ly); ly += 40; }
+      x.globalAlpha = 1;
+    }
+    x.font = '800 26px Manrope, system-ui, sans-serif'; x.fillStyle = 'rgba(255,255,255,0.5)';
+    x.fillText('A U R A', W / 2, H - 70);
+  };
+  const types = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+  const mime = types.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+  const rec = new MediaRecorder(c.captureStream(FPS), { mimeType: mime, videoBitsPerSecond: 6e6 });
+  const chunks = [];
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  const done = new Promise((r) => { rec.onstop = r; });
+  rec.start(250);
+  const t0 = performance.now();
+  await new Promise((resolve) => {
+    const frame = () => {
+      const t = (performance.now() - t0) / 1000;
+      draw(Math.min(t, SEC));
+      if (t < SEC) requestAnimationFrame(frame); else resolve();
+    };
+    frame();
+  });
+  rec.stop();
+  await done;
+  const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+  const blob = new Blob(chunks, { type: mime.split(';')[0] });
+  const name = `aura-${Date.now()}.${ext}`;
+  if (NATIVE?.shareFile) {
+    const data = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
+    if (NATIVE.shareFile(data, blob.type, name, `${item.name} — ${itemArtists(item)}`)) return;
+  }
+  const file = new File([blob], name, { type: blob.type });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: item.name }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = el('a', { href: URL.createObjectURL(blob), download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  toast('Видео сохранено' + (ext === 'webm' ? ' (webm — Instagram может попросить mp4)' : ''));
+}
+
+/* ---------- Голосом: «включи Kazybek», «следующий», «пауза», «громче» ---------- */
+function startVoice() {
+  if (NATIVE?.voice) { NATIVE.voice(); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('Этот браузер не понимает голос — попробуй Chrome или приложение Aura'); return; }
+  const r = new SR();
+  r.lang = 'ru-RU';
+  r.interimResults = false;
+  r.onresult = (e) => handleVoice(e.results[0][0].transcript);
+  r.onerror = () => toast('Не расслышал, попробуй ещё раз');
+  r.start();
+  toast('🎙 Слушаю…');
+}
+
+window.auraVoice = (text) => { if (text) handleVoice(text); };
+
+async function handleVoice(raw) {
+  const t = raw.toLowerCase().trim();
+  toast('🎙 «' + raw + '»');
+  const vol = (d) => { const v = Math.max(0, Math.min(100, (ui.pb?.device?.volume_percent ?? 50) + d)); api.volume(v).catch((e) => handleError(e, false)); };
+  if (/^(следующ|дальше|next|скип|пропусти)/.test(t)) return skip(1);
+  if (/^(назад|предыдущ|previous)/.test(t)) return skip(-1);
+  if (/^(пауза|стоп|останови|pause)/.test(t)) return ui.pb?.is_playing && togglePlay();
+  if (/^(громче)/.test(t)) return vol(15);
+  if (/^(тише)/.test(t)) return vol(-15);
+  if (/(нравится|лайк)/.test(t)) return toggleLike(true);
+  if (/умн.*перемеш/.test(t)) return startSmartFromPlayer();
+  if (/(вечеринк)/.test(t)) return openParty();
+  if (/(aura дня|аура дня)/.test(t)) return playDaily();
+  for (const m of MOODS) if (t.includes(m.name.toLowerCase()) || (m.id === 'gym' && /спорт|трениров/.test(t))) return playMood(m);
+  const m = t.match(/^(?:включи|поставь|играй|сыграй|play)\s*(.*)$/);
+  if (!m || !m[1]) { if (/^(играй|продолжи|включи|play)/.test(t)) return !ui.pb?.is_playing && togglePlay(); toast('Не понял команду: «' + raw + '»'); return; }
+  const q = m[1].trim();
+  if (/любим/.test(q)) return playOn({ context_uri: `spotify:user:${(await getMe()).id}:collection` }, true);
+  try {
+    const r = await api.searchTracks(q);
+    const tracks = r?.tracks?.items || [];
+    if (!tracks.length) { toast('Ничего не нашёл по «' + q + '»'); return; }
+    // Назвали артиста — включаем его вперемешку, иначе — найденный трек
+    const art = tracks.map((x) => x.artists?.[0]).find((a) => a && q.includes(a.name.toLowerCase()) || (a && a.name.toLowerCase().includes(q)));
+    if (art?.id) { await playOn({ context_uri: 'spotify:artist:' + art.id }, true); toast('▶ ' + art.name); }
+    else { await playOn({ uris: [tracks[0].uri] }, null); toast('▶ ' + tracks[0].name + ' — ' + itemArtists(tracks[0])); }
+  } catch (e) { handleError(e, false); }
+}
+
+/* ---------- В машине: свой плейлист, когда подключился Bluetooth машины (Android) ---------- */
+function carCard() {
+  const auto = JSON.parse(NATIVE.getAuto());
+  const car = auto.car || {};
+  const save = () => { auto.car = car; NATIVE.setAuto(JSON.stringify(auto)); };
+  let devices = [];
+  try { devices = JSON.parse(NATIVE.bondedAudio?.() || '[]'); } catch {}
+  const devSel = el('select', { class: 'select' }, el('option', { value: '' }, 'Выбери Bluetooth машины'),
+    ...devices.map((d) => el('option', { value: d.address, selected: d.address === car.address }, cleanDeviceName(d.name))));
+  devSel.addEventListener('change', () => { car.address = devSel.value; car.name = devSel.selectedOptions[0].textContent; save(); });
+  const pick = el('select', { class: 'select' }, el('option', { value: '' }, 'Продолжить, что играло'));
+  if (car.uri) pick.append(el('option', { value: car.uri, selected: true }, car.uriName || 'Выбранный плейлист'));
+  (async () => {
+    try {
+      const me = await getMe();
+      const liked = `spotify:user:${me.id}:collection`;
+      if (liked !== car.uri) pick.append(el('option', { value: liked }, 'Любимые треки'));
+      for (const p of ((await api.playlists(0))?.items || []).filter(Boolean)) if (p.uri !== car.uri) pick.append(el('option', { value: p.uri }, p.name));
+    } catch {}
+  })();
+  pick.addEventListener('change', () => { car.uri = pick.value; car.uriName = pick.value ? pick.selectedOptions[0].textContent : ''; save(); });
+  return el('div', { class: 'settings-card' },
+    el('h3', {}, '🚗 В машине'),
+    el('p', {}, 'Сел в машину — телефон подключился к её Bluetooth, и сразу играет выбранный плейлист вперемешку.'),
+    switchRow('Включать музыку в машине', !!car.on, (on) => { car.on = on; save(); }),
+    devSel, el('p', { style: 'margin-top:12px' }, 'Что играть'), pick);
 }
 
 function libraryView() {
@@ -3138,8 +3448,8 @@ function queueView() {
           body.append(el('div', { class: 'section-label' }, 'Сейчас играет'),
             el('div', { class: 'list' }, trackRow(q.currently_playing, null, false)));
         }
-        if (smart.on && smart.list?.length) {
-          body.append(el('button', { class: 'btn-smart', type: 'button', html: icon('sparkle') + 'Сохранить умный микс как плейлист', onclick: saveSmartMix }));
+        if (smart.list?.length && smart.list.some((t) => t.uri === ui.trackUri)) {
+          body.append(el('button', { class: 'btn-smart', type: 'button', html: icon('sparkle') + 'Сохранить этот микс как плейлист', onclick: saveSmartMix }));
         }
         const items = (q?.queue || []).filter(Boolean);
         body.append(el('div', { class: 'section-label' }, 'Далее'));
@@ -3293,6 +3603,7 @@ function settingsView() {
         body.append(NATIVE.mediaSupported?.() ? nowBarCard() : nowBarApiCard());
         if (hp.cur?.sony) body.append(sonyCard());
         else if (hp.cur?.buds) body.append(budsCard());
+        if (NATIVE.bondedAudio) body.append(carCard());
         body.append(alarmCard());
         body.append(updateCard());
       }
@@ -4157,6 +4468,7 @@ function startApp(a) {
   updateViz();
   updateWakeLock();
   if (settings.playInAura && !a.isDemo) loadLocalPlayer();
+  setTimeout(runTogether, 1500);
   if (NATIVE) {
     try { window.auraHeadphones(JSON.parse(NATIVE.headphones())); } catch {}
     // Проверяем обновления не чаще раза в 6 часов
@@ -4302,6 +4614,7 @@ async function boot() {
   document.body.dataset.glass = settings.glass;
   document.body.classList.toggle('canvas', !!settings.canvas);
   if (!NATIVE && new URLSearchParams(location.search).get('state')?.startsWith('app-')) { handOffToApp(); return; }
+  catchTogether();
   if (NATIVE) {
     NATIVE.setClientId(Auth.clientId());
     // Первая версия приложения хранила вход в странице — переносим

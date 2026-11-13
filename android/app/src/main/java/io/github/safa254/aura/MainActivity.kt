@@ -1,6 +1,7 @@
 package io.github.safa254.aura
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
@@ -170,6 +171,16 @@ class MainActivity : Activity() {
         }
     }
 
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_VOICE && resultCode == RESULT_OK) {
+            val text = data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
+            web.evaluateJavascript("window.auraVoice && window.auraVoice(${org.json.JSONObject.quote(text)})", null)
+        }
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
@@ -298,6 +309,61 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun engineCommand(cmd: String) = Engine.command(cmd)
+
+        /** Голосовая команда: системное окно распознавания речи, ответ — в window.auraVoice(). */
+        @JavascriptInterface
+        fun voice() = runOnUiThread {
+            val i = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")
+                .putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Скажи: «включи …», «следующий», «пауза»")
+            try {
+                @Suppress("DEPRECATION")
+                startActivityForResult(i, REQ_VOICE)
+            } catch (_: Exception) {
+                Toast.makeText(this@MainActivity, "На телефоне нет распознавания речи Google", Toast.LENGTH_LONG).show()
+            }
+        }
+
+        /** Сохранённые Bluetooth-аудиоустройства (для выбора машины): [{name, address}]. */
+        @JavascriptInterface
+        fun bondedAudio(): String {
+            val arr = org.json.JSONArray()
+            try {
+                val adapter = (getSystemService(BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager).adapter
+                @SuppressLint("MissingPermission")
+                val list = adapter?.bondedDevices.orEmpty()
+                for (d in list) {
+                    if (!Headphones.isAudio(d)) continue
+                    @SuppressLint("MissingPermission")
+                    val name = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) d.alias else null) ?: d.name ?: d.address
+                    arr.put(org.json.JSONObject().put("name", name).put("address", d.address))
+                }
+            } catch (_: Exception) {
+            }
+            return arr.toString()
+        }
+
+        /** Поделиться файлом (видео для сторис): сохраняем в «Фильмы/Aura» и открываем «Поделиться». */
+        @JavascriptInterface
+        fun shareFile(dataUrl: String, mime: String, name: String, title: String): Boolean = try {
+            val bytes = Base64.decode(dataUrl.substringAfter(','), Base64.DEFAULT)
+            val video = mime.startsWith("video/")
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, (if (video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES) + "/Aura")
+            }
+            val collection = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val uri = contentResolver.insert(collection, values)!!
+            contentResolver.openOutputStream(uri)!!.use { it.write(bytes) }
+            val send = Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uri)
+                .putExtra(Intent.EXTRA_TEXT, title).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(send, title).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (_: Exception) {
+            false
+        }
 
         /** Журнал приложения (для «Журнала плеера»). */
         @JavascriptInterface
@@ -549,5 +615,6 @@ class MainActivity : Activity() {
         const val REQ_BLUETOOTH = 1
         const val REQ_MIC = 2
         const val REQ_NOTIFY = 3
+        const val REQ_VOICE = 4
     }
 }

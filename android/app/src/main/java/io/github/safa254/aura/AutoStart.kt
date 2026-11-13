@@ -25,6 +25,21 @@ class AutoStart : BroadcastReceiver() {
         @Suppress("DEPRECATION")
         val dev = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
         val cfg = get(ctx)
+        // Машина: свой плейлист, когда подключился её Bluetooth
+        val car = cfg.optJSONObject("car")
+        if (car != null && car.optBoolean("on") && car.optString("address") == dev.address) {
+            val pending = goAsync()
+            Thread {
+                try {
+                    Thread.sleep(3000)
+                    try { Spotify(ctx).play(car.optString("uri").ifEmpty { null }, true, onPhone = true) } catch (_: Exception) {}
+                    AuraWidget.refresh(ctx)
+                } finally {
+                    pending.finish()
+                }
+            }.start()
+            return
+        }
         val open = cfg.optBoolean("open")
         val resume = cfg.optBoolean("resume")
         if (!open && !resume) return
