@@ -2623,43 +2623,47 @@ function bindHub() {
 }
 
 // Мини-плеер как в Spotify: влево — следующий трек, вправо — предыдущий, вверх — развернуть.
-// Название с обложкой едут за пальцем и уезжают в сторону, если отпустить дальше трети ширины.
+// Срабатывает и длинный свайп (дальше четверти ширины), и короткий быстрый смах.
+// На событиях касания (touch*), а не pointer*: во встроенном браузере Android так надёжнее.
 function bindMiniSwipes() {
   const mini = $('#mini'), left = mini.querySelector('.mini-left');
-  let x0 = null, y0 = 0, dx = 0, horizontal = false;
-  mini.addEventListener('pointerdown', (e) => {
-    // Свайп можно начинать где угодно, в том числе на кнопках (как в Spotify)
-    if (isDesk() || e.target.closest('input')) { x0 = null; return; }
-    x0 = e.clientX; y0 = e.clientY; dx = 0; horizontal = false;
-  });
-  mini.addEventListener('pointermove', (e) => {
+  let x0 = null, y0 = 0, t0 = 0, dx = 0, horizontal = false;
+  const reset = () => {
+    left.classList.remove('dragging');
+    left.style.transform = '';
+    left.style.opacity = '';
+  };
+  const start = (x, y) => { x0 = x; y0 = y; t0 = performance.now(); dx = 0; horizontal = false; };
+  const move = (x, y, e) => {
     if (x0 == null) return;
-    dx = e.clientX - x0;
-    const dy = e.clientY - y0;
-    if (!horizontal && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+    dx = x - x0;
+    const dy = y - y0;
+    if (!horizontal && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
       horizontal = true;
-      mini.setPointerCapture?.(e.pointerId);
       left.classList.add('dragging');
     }
     if (horizontal) {
+      if (e?.cancelable) e.preventDefault();
       left.style.transform = `translateX(${dx}px)`;
       left.style.opacity = String(Math.max(0.25, 1 - Math.abs(dx) / (mini.clientWidth * 0.8)));
     }
-  });
-  const end = (e) => {
-    if (x0 == null) return;
-    const dy = e.clientY - y0;
+  };
+  const end = (y) => {
+    if (x0 == null) return false;
+    const dy = y - y0, dt = Math.max(1, performance.now() - t0);
     x0 = null;
     left.classList.remove('dragging');
     if (!horizontal) {
-      if (-dy > 40) expandPlayer();
-      return;
+      if (-dy > 40) { expandPlayer(); return true; }
+      return false;
     }
-    // Клик после свайпа не должен открыть плеер
+    // Клик после свайпа не должен открыть плеер или нажать кнопку
     mini.dataset.swiped = '1';
-    setTimeout(() => { delete mini.dataset.swiped; }, 50);
-    if (Math.abs(dx) > mini.clientWidth / 3) {
+    setTimeout(() => { delete mini.dataset.swiped; }, 400);
+    const fast = Math.abs(dx) > 40 && Math.abs(dx) / dt > 0.3;
+    if (Math.abs(dx) > mini.clientWidth / 4 || fast) {
       const dir = dx < 0 ? 1 : -1;
+      navigator.vibrate?.(10);
       left.style.transform = `translateX(${dx < 0 ? -110 : 110}%)`;
       left.style.opacity = '0';
       command(() => (dir > 0 ? api.next() : api.prev()));
@@ -2667,26 +2671,29 @@ function bindMiniSwipes() {
       setTimeout(() => {
         left.classList.add('dragging');
         left.style.transform = `translateX(${dx < 0 ? 40 : -40}%)`;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          left.classList.remove('dragging');
-          left.style.transform = '';
-          left.style.opacity = '';
-        }));
+        requestAnimationFrame(() => requestAnimationFrame(reset));
       }, 220);
     } else {
-      left.style.transform = '';
-      left.style.opacity = '';
+      reset();
     }
+    return true;
   };
-  mini.addEventListener('pointerup', end);
+
+  mini.addEventListener('touchstart', (e) => {
+    if (isDesk() || e.touches.length !== 1) return;
+    start(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+  mini.addEventListener('touchmove', (e) => move(e.touches[0].clientX, e.touches[0].clientY, e), { passive: false });
+  mini.addEventListener('touchend', (e) => { const t = e.changedTouches[0]; if (end(t.clientY) && horizontal === false && mini.dataset.swiped) e.preventDefault(); }, { passive: false });
+  mini.addEventListener('touchcancel', () => { x0 = null; reset(); });
+
+  // Мышь (компьютер в узком окне)
+  mini.addEventListener('mousedown', (e) => { if (!isDesk() && !e.target.closest('input')) start(e.clientX, e.clientY); });
+  window.addEventListener('mousemove', (e) => { if (x0 != null && e.buttons) move(e.clientX, e.clientY); });
+  window.addEventListener('mouseup', (e) => { if (x0 != null) end(e.clientY); });
+
   // После свайпа клик не должен нажать кнопку, на которой он начался
   mini.addEventListener('click', (e) => { if (mini.dataset.swiped) { e.stopPropagation(); e.preventDefault(); } }, true);
-  mini.addEventListener('pointercancel', () => {
-    x0 = null;
-    left.classList.remove('dragging');
-    left.style.transform = '';
-    left.style.opacity = '';
-  });
 }
 
 /* ---------- Главная: как в Spotify, из твоей истории ----------
