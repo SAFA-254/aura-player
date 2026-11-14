@@ -2611,7 +2611,7 @@ function bindHub() {
   $('#hubVoice').addEventListener('click', startVoice);
   document.querySelectorAll('.tabbar button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
   $('#mini').addEventListener('click', (e) => {
-    if (e.target.closest('button, input')) return;
+    if (e.target.closest('button, input') || $('#mini').dataset.swiped) return;
     if (isDesk() && !e.target.closest('.mini-left')) return;
     expandPlayer();
   });
@@ -2619,10 +2619,71 @@ function bindHub() {
   $('#mini').addEventListener('keydown', (e) => { if (e.key === 'Enter') expandPlayer(); });
   $('#miniPlay').addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
   $('#miniDevice').addEventListener('click', (e) => { e.stopPropagation(); openDevices(); });
-  // Свайп вверх по мини-плееру — развернуть
-  let y0 = null;
-  $('#mini').addEventListener('pointerdown', (e) => { y0 = e.clientY; });
-  $('#mini').addEventListener('pointerup', (e) => { if (y0 != null && y0 - e.clientY > 40) expandPlayer(); y0 = null; });
+  bindMiniSwipes();
+}
+
+// Мини-плеер как в Spotify: влево — следующий трек, вправо — предыдущий, вверх — развернуть.
+// Название с обложкой едут за пальцем и уезжают в сторону, если отпустить дальше трети ширины.
+function bindMiniSwipes() {
+  const mini = $('#mini'), left = mini.querySelector('.mini-left');
+  let x0 = null, y0 = 0, dx = 0, horizontal = false;
+  mini.addEventListener('pointerdown', (e) => {
+    if (isDesk() || e.target.closest('button, input')) { x0 = null; return; }
+    x0 = e.clientX; y0 = e.clientY; dx = 0; horizontal = false;
+  });
+  mini.addEventListener('pointermove', (e) => {
+    if (x0 == null) return;
+    dx = e.clientX - x0;
+    const dy = e.clientY - y0;
+    if (!horizontal && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      horizontal = true;
+      mini.setPointerCapture?.(e.pointerId);
+      left.classList.add('dragging');
+    }
+    if (horizontal) {
+      left.style.transform = `translateX(${dx}px)`;
+      left.style.opacity = String(Math.max(0.25, 1 - Math.abs(dx) / (mini.clientWidth * 0.8)));
+    }
+  });
+  const end = (e) => {
+    if (x0 == null) return;
+    const dy = e.clientY - y0;
+    x0 = null;
+    left.classList.remove('dragging');
+    if (!horizontal) {
+      if (-dy > 40) expandPlayer();
+      return;
+    }
+    // Клик после свайпа не должен открыть плеер
+    mini.dataset.swiped = '1';
+    setTimeout(() => { delete mini.dataset.swiped; }, 50);
+    if (Math.abs(dx) > mini.clientWidth / 3) {
+      const dir = dx < 0 ? 1 : -1;
+      left.style.transform = `translateX(${dx < 0 ? -110 : 110}%)`;
+      left.style.opacity = '0';
+      command(() => (dir > 0 ? api.next() : api.prev()));
+      // Новый трек «въезжает» с другой стороны
+      setTimeout(() => {
+        left.classList.add('dragging');
+        left.style.transform = `translateX(${dx < 0 ? 40 : -40}%)`;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          left.classList.remove('dragging');
+          left.style.transform = '';
+          left.style.opacity = '';
+        }));
+      }, 220);
+    } else {
+      left.style.transform = '';
+      left.style.opacity = '';
+    }
+  };
+  mini.addEventListener('pointerup', end);
+  mini.addEventListener('pointercancel', () => {
+    x0 = null;
+    left.classList.remove('dragging');
+    left.style.transform = '';
+    left.style.opacity = '';
+  });
 }
 
 /* ---------- Главная: как в Spotify, из твоей истории ----------

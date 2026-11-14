@@ -1012,3 +1012,8 @@ body[data-theme="vinyl"] .art.drop { animation: vinylDrop 0.7s cubic-bezier(.2, 
 .mix-art.daily { background: conic-gradient(from 210deg at 70% 30%, var(--accent), #4a2bff, #ff3d8b, var(--accent)); }
 .mix-art.daily svg { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; color: #fff; }
 .mix-emoji { position: absolute; top: 10px; right: 12px; font-size: 34px; }
+
+/* Мини-плеер: название с обложкой едут за пальцем */
+.mini { touch-action: pan-y; }
+.mini-left { transition: transform 0.25s cubic-bezier(.2, .9, .3, 1), opacity 0.2s ease; will-change: transform; }
+.mini-left.dragging { transition: none; }
