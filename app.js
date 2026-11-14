@@ -2628,7 +2628,8 @@ function bindMiniSwipes() {
   const mini = $('#mini'), left = mini.querySelector('.mini-left');
   let x0 = null, y0 = 0, dx = 0, horizontal = false;
   mini.addEventListener('pointerdown', (e) => {
-    if (isDesk() || e.target.closest('button, input')) { x0 = null; return; }
+    // Свайп можно начинать где угодно, в том числе на кнопках (как в Spotify)
+    if (isDesk() || e.target.closest('input')) { x0 = null; return; }
     x0 = e.clientX; y0 = e.clientY; dx = 0; horizontal = false;
   });
   mini.addEventListener('pointermove', (e) => {
@@ -2678,6 +2679,8 @@ function bindMiniSwipes() {
     }
   };
   mini.addEventListener('pointerup', end);
+  // После свайпа клик не должен нажать кнопку, на которой он начался
+  mini.addEventListener('click', (e) => { if (mini.dataset.swiped) { e.stopPropagation(); e.preventDefault(); } }, true);
   mini.addEventListener('pointercancel', () => {
     x0 = null;
     left.classList.remove('dragging');
